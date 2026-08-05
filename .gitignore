@@ -21,3 +21,6 @@ gha-creds-*.json
 
 # IDE
 .vscode/
+
+# Agents
+.agents/plans/

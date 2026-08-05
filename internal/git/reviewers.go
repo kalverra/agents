@@ -11,6 +11,7 @@ import (
 
 var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@`)
 
+// ReviewerSuggestion holds author recommendation details based on git blame.
 type ReviewerSuggestion struct {
 	Name  string   `json:"name"`
 	Files []string `json:"files"`

@@ -63,7 +63,7 @@ func addAndCommitBytes(
 	require.NoError(t, os.WriteFile(full, content, 0o600))
 
 	runGitCmd(t, dir, "add", path)
-	runGitCmd(t, dir, "commit", "-m", message)
+	runGitCmd(t, dir, "commit", "--no-verify", "-m", message)
 
 	return runGitCmd(t, dir, "rev-parse", "HEAD")
 }

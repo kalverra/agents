@@ -33,7 +33,7 @@ type envelope struct {
 // Write renders the final command result.
 // AI mode (--ai-output): if data is a string, prints it directly. Otherwise emits compact single-line JSON. Never uses markdown code fences.
 // Human mode: calls humanFn for display.
-func Write(command string, data any, humanFn func()) {
+func Write(_ string, data any, humanFn func()) {
 	if jsonMode {
 		if s, ok := data.(string); ok {
 			fmt.Println(s)

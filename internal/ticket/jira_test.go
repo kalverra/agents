@@ -245,10 +245,14 @@ func TestJira_CreateIssue_success(t *testing.T) {
 		}
 		var body map[string]any
 		err := json.NewDecoder(r.Body).Decode(&body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		fields, ok := body["fields"].(map[string]any)
-		require.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		proj, _ := fields["project"].(map[string]any)
 		assert.Equal(t, "DX", proj["key"])
 		assert.Equal(t, "New Task", fields["summary"])
@@ -294,12 +298,18 @@ func TestJira_CreateIssue_withEpic(t *testing.T) {
 		}
 		var body map[string]any
 		err := json.NewDecoder(r.Body).Decode(&body)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		fields, ok := body["fields"].(map[string]any)
-		require.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		parent, ok := fields["parent"].(map[string]any)
-		require.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		assert.Equal(t, "DX-50", parent["key"])
 
 		w.WriteHeader(http.StatusCreated)
@@ -336,6 +346,8 @@ func TestJira_ListEpics_success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet &&
 			(r.URL.Path == "/rest/api/3/search/jql" || r.URL.Path == "/rest/api/3/search") {
+			jql := r.URL.Query().Get("jql")
+			assert.Contains(t, jql, "assignee = currentUser()")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"issues": []map[string]any{
 					{
@@ -386,6 +398,8 @@ func TestJira_ListAssignedTickets_success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet &&
 			(r.URL.Path == "/rest/api/3/search/jql" || r.URL.Path == "/rest/api/3/search") {
+			fields := r.URL.Query().Get("fields")
+			assert.Contains(t, fields, "parent")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"issues": []map[string]any{
 					{
@@ -394,6 +408,12 @@ func TestJira_ListAssignedTickets_success(t *testing.T) {
 						"fields": map[string]any{
 							"summary": "Fix auth token refresh",
 							"status":  map[string]any{"name": "In Progress"},
+							"parent": map[string]any{
+								"key": "DX-10",
+								"fields": map[string]any{
+									"summary": "Core Infrastructure Epic",
+								},
+							},
 						},
 					},
 				},
@@ -418,4 +438,6 @@ func TestJira_ListAssignedTickets_success(t *testing.T) {
 	require.Len(t, tickets, 1)
 	assert.Equal(t, "DX-55", tickets[0].ID)
 	assert.Equal(t, "Fix auth token refresh", tickets[0].Title)
+	assert.Equal(t, "DX-10", tickets[0].ParentID)
+	assert.Equal(t, "Core Infrastructure Epic", tickets[0].ParentTitle)
 }

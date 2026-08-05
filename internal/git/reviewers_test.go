@@ -29,7 +29,7 @@ func addAndCommitWithDate(t *testing.T, dir, path, content, message, author, ema
 	env := os.Environ()
 	env = append(env, "GIT_AUTHOR_DATE="+dateStr, "GIT_COMMITTER_DATE="+dateStr)
 
-	runGitCmdWithEnv(t, dir, env, "commit", "-m", message)
+	runGitCmdWithEnv(t, dir, env, "commit", "--no-verify", "-m", message)
 
 	return runGitCmd(t, dir, "rev-parse", "HEAD")
 }
@@ -37,7 +37,7 @@ func addAndCommitWithDate(t *testing.T, dir, path, content, message, author, ema
 func runGitCmdWithEnv(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //nolint:gosec
 	cmd.Dir = dir
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer

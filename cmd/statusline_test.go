@@ -485,6 +485,37 @@ func TestParseAndBuildStatusline(t *testing.T) {
 			}`,
 			expected: "Gemini 3.5 Flash | (12.3%) | ~/Projects/testrig (mock-git-branch*) | 🛠️ 4 terminals",
 		},
+		{
+			name: "Antigravity Payload with execution_mode",
+			jsonInput: `{
+				"model": {
+					"id": "gemini-3.5-flash",
+					"display_name": "Gemini 3.5 Flash"
+				},
+				"cwd": "/Users/adamhamrick/Projects/testrig",
+				"context_window": {
+					"used_percentage": 15.5
+				},
+				"agent_state": "working",
+				"execution_mode": "plan"
+			}`,
+			expected: "Gemini 3.5 Flash | (15.5%) | ~/Projects/testrig (mock-git-branch*) | working | plan",
+		},
+		{
+			name: "Payload with permission_mode fallback",
+			jsonInput: `{
+				"model": {
+					"id": "claude-3-5-sonnet",
+					"display_name": "Sonnet 3.5"
+				},
+				"cwd": "/Users/adamhamrick/Projects/testrig",
+				"context_window": {
+					"used_percentage": 10.0
+				},
+				"permission_mode": "auto"
+			}`,
+			expected: "Sonnet 3.5 | (10.0%) | ~/Projects/testrig (mock-git-branch*) | auto",
+		},
 	}
 
 	for _, tt := range tests {
@@ -492,6 +523,51 @@ func TestParseAndBuildStatusline(t *testing.T) {
 			got, err := parseAndBuildStatusline([]byte(tt.jsonInput))
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, stripAnsi(got))
+		})
+	}
+}
+
+func TestGetExecutionMode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		payload  statuslineInputPayload
+		expected string
+	}{
+		{
+			name: "execution_mode takes priority",
+			payload: statuslineInputPayload{
+				ExecutionMode:  "plan",
+				PermissionMode: "auto",
+				Mode:           "default",
+			},
+			expected: "plan",
+		},
+		{
+			name: "permission_mode fallback",
+			payload: statuslineInputPayload{
+				PermissionMode: "auto",
+				Mode:           "default",
+			},
+			expected: "auto",
+		},
+		{
+			name: "mode fallback",
+			payload: statuslineInputPayload{
+				Mode: "default",
+			},
+			expected: "default",
+		},
+		{
+			name:     "empty when none present",
+			payload:  statuslineInputPayload{},
+			expected: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, getExecutionMode(tt.payload))
 		})
 	}
 }

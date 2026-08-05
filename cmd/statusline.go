@@ -95,9 +95,22 @@ type statuslineInputPayload struct {
 	Subagents       []statuslineSubagent    `json:"subagents"`
 	TaskCount       *int                    `json:"task_count"`
 	AgentState      string                  `json:"agent_state"`
+	ExecutionMode   string                  `json:"execution_mode"`
+	PermissionMode  string                  `json:"permission_mode"`
+	Mode            string                  `json:"mode"`
 	Cost            statuslineCost          `json:"cost"`
 	Effort          statuslineEffort        `json:"effort"`
 	PR              *statuslinePR           `json:"pr"`
+}
+
+func getExecutionMode(payload statuslineInputPayload) string {
+	if payload.ExecutionMode != "" {
+		return payload.ExecutionMode
+	}
+	if payload.PermissionMode != "" {
+		return payload.PermissionMode
+	}
+	return payload.Mode
 }
 
 var (
@@ -470,6 +483,11 @@ func parseAndBuildStatusline(jsonData []byte) (string, error) {
 			ansiState = "\033[1;31m"
 		}
 		parts = append(parts, fmt.Sprintf("%s%s%s", ansiState, payload.AgentState, ansiReset))
+	}
+
+	if mode := getExecutionMode(payload); mode != "" {
+		ansiMode := "\033[1;35m"
+		parts = append(parts, fmt.Sprintf("%s%s%s", ansiMode, mode, ansiReset))
 	}
 
 	if payload.Cost.TotalCostUSD > 0 {

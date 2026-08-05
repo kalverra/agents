@@ -53,6 +53,8 @@ func xmlTextEscape(s string) string {
 }
 
 // TicketToMarkdownFile renders ticket details and comments into a structured XML-markdown string for <KEY>.md files.
+//
+//nolint:revive
 func TicketToMarkdownFile(tk *Ticket) string {
 	if tk == nil {
 		return ""

@@ -19,6 +19,8 @@ type Config struct {
 	TodoistAPIToken string `mapstructure:"todoist_api_token"`
 	// TodoistRESTBase overrides the Todoist API v1 base URL (default https://api.todoist.com/api/v1). Env: TODOIST_REST_BASE.
 	TodoistRESTBase string `mapstructure:"todoist_rest_base"`
+	// TodoistProjects narrows personal Todoist task searches to specific project names or IDs. Env: TODOIST_PROJECTS.
+	TodoistProjects []string `mapstructure:"todoist_projects"`
 
 	// JiraCloud: Atlassian account email for Basic auth. Env: JIRA_EMAIL.
 	JiraEmail string `mapstructure:"jira_email"`
@@ -115,6 +117,19 @@ func Load(opts ...LoadOption) (*Config, error) {
 		for p := range parts {
 			if trimmed := strings.TrimSpace(p); trimmed != "" {
 				cfg.WorkRepos = append(cfg.WorkRepos, trimmed)
+			}
+		}
+	}
+
+	// Handle TODOIST_PROJECTS env var if it was provided as a comma-separated string
+	if rawTodoistProjects := v.GetString(
+		"todoist_projects",
+	); len(cfg.TodoistProjects) == 0 &&
+		rawTodoistProjects != "" {
+		parts := strings.SplitSeq(rawTodoistProjects, ",")
+		for p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				cfg.TodoistProjects = append(cfg.TodoistProjects, trimmed)
 			}
 		}
 	}

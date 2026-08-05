@@ -302,13 +302,13 @@ func (j *Jira) CreateIssue(ctx context.Context, req CreateIssueRequest) (*Ticket
 	}, nil
 }
 
-// ListEpics searches Jira for active Epics assigned to current user or updated recently.
+// ListEpics searches Jira for active Epics assigned to current user.
 func (j *Jira) ListEpics(ctx context.Context) ([]*Ticket, error) {
 	if err := j.validate(); err != nil {
 		return nil, err
 	}
 
-	jql := "issuetype = Epic AND statusCategory != Done ORDER BY updated DESC"
+	jql := "assignee = currentUser() AND issuetype = Epic AND statusCategory != Done ORDER BY updated DESC"
 	resp, err := j.client.R().
 		SetContext(ctx).
 		SetQueryParams(map[string]string{
@@ -369,7 +369,7 @@ func (j *Jira) ListAssignedTickets(ctx context.Context) ([]*Ticket, error) {
 		SetContext(ctx).
 		SetQueryParams(map[string]string{
 			"jql":        jql,
-			"fields":     "summary,status",
+			"fields":     "summary,status,parent,updated,sprint,customfield_10020",
 			"maxResults": "20",
 		}).
 		Get("/search/jql")
@@ -378,7 +378,7 @@ func (j *Jira) ListAssignedTickets(ctx context.Context) ([]*Ticket, error) {
 			SetContext(ctx).
 			SetQueryParams(map[string]string{
 				"jql":        jql,
-				"fields":     "summary,status",
+				"fields":     "summary,status,parent,updated,sprint,customfield_10020",
 				"maxResults": "20",
 			}).
 			Get("/search")
@@ -387,14 +387,28 @@ func (j *Jira) ListAssignedTickets(ctx context.Context) ([]*Ticket, error) {
 		return nil, err
 	}
 
+	type sprintObj struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+
 	var searchRes struct {
 		Issues []struct {
 			Key    string `json:"key"`
 			Fields struct {
 				Summary string `json:"summary"`
+				Updated string `json:"updated"`
 				Status  struct {
 					Name string `json:"name"`
 				} `json:"status"`
+				Parent *struct {
+					Key    string `json:"key"`
+					Fields struct {
+						Summary string `json:"summary"`
+					} `json:"fields"`
+				} `json:"parent"`
+				Sprint           *sprintObj  `json:"sprint"`
+				CustomField10020 []sprintObj `json:"customfield_10020"`
 			} `json:"fields"`
 		} `json:"issues"`
 	}
@@ -404,14 +418,36 @@ func (j *Jira) ListAssignedTickets(ctx context.Context) ([]*Ticket, error) {
 
 	var tickets []*Ticket
 	for _, item := range searchRes.Issues {
-		tickets = append(tickets, &Ticket{
-			ID:     item.Key,
-			Title:  item.Fields.Summary,
-			Status: item.Fields.Status.Name,
-			URL:    j.browseURL(item.Key),
-		})
+		sName := ""
+		if item.Fields.Sprint != nil && item.Fields.Sprint.Name != "" {
+			sName = item.Fields.Sprint.Name
+		} else {
+			for _, sp := range item.Fields.CustomField10020 {
+				if sp.Name != "" {
+					sName = sp.Name
+					if strings.EqualFold(sp.State, "active") {
+						break
+					}
+				}
+			}
+		}
+
+		tk := &Ticket{
+			ID:        item.Key,
+			Title:     item.Fields.Summary,
+			Status:    item.Fields.Status.Name,
+			UpdatedAt: item.Fields.Updated,
+			Sprint:    sName,
+			URL:       j.browseURL(item.Key),
+		}
+		if item.Fields.Parent != nil {
+			tk.ParentID = item.Fields.Parent.Key
+			tk.ParentTitle = item.Fields.Parent.Fields.Summary
+		}
+		tickets = append(tickets, tk)
 	}
 	return tickets, nil
+
 }
 
 type jiraIssueEnvelope struct {

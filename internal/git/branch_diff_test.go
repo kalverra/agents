@@ -125,7 +125,7 @@ func TestBranchDiff(t *testing.T) {
 				checkoutBranch(t, dir, "feature", true)
 				require.NoError(t, os.Remove(filepath.Join(dir, "remove.txt")))
 				runGitCmd(t, dir, "add", "remove.txt")
-				runGitCmd(t, dir, "commit", "-m", "delete file")
+				runGitCmd(t, dir, "commit", "--no-verify", "-m", "delete file")
 				return dir, BranchDiffOptions{}
 			},
 			wantBase: "main",

@@ -274,7 +274,9 @@ func TestTodoist_CreateTask_success(t *testing.T) {
 		if r.Method == http.MethodPost && r.URL.Path == testAPIv1Base+"/tasks" {
 			var body map[string]any
 			err := json.NewDecoder(r.Body).Decode(&body)
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 
 			assert.Equal(t, "New Todoist task", body["content"])
 			assert.Equal(t, "Task description", body["description"])
@@ -301,4 +303,141 @@ func TestTodoist_CreateTask_success(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "999", got.ID)
 	assert.Equal(t, "New Todoist task", got.Title)
+}
+
+func TestTodoist_GetWorkProjectID(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == testAPIv1Base+"/projects" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"id": "p-personal", "name": "Personal"},
+					{"id": "p-work", "name": "Work"},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewTodoist(zerolog.Nop(), TodoistConfig{Token: "tok", BaseURL: srv.URL + testAPIv1Base})
+	projectID, err := p.GetProjectIDByName(context.Background(), "Work")
+	require.NoError(t, err)
+	assert.Equal(t, "p-work", projectID)
+}
+
+func TestTodoist_FetchCompletedTasks(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == testAPIv1Base+"/tasks/completed" {
+			assert.Equal(t, "p-work", r.URL.Query().Get("project_id"))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{
+						"id":           "task-101",
+						"content":      "Done ticket [DX-4553](https://jira.com/DX-4553)",
+						"description":  "Completed subtask",
+						"completed_at": "2026-08-02T12:00:00Z",
+						"labels":       []string{"jira-sync"},
+					},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewTodoist(zerolog.Nop(), TodoistConfig{Token: "tok", BaseURL: srv.URL + testAPIv1Base})
+	tasks, err := p.FetchCompletedTasks(context.Background(), "p-work")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "task-101", tasks[0].ID)
+	assert.Equal(t, []string{"jira-sync"}, tasks[0].Labels)
+}
+
+func TestTodoist_ListActiveTasks_success(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == testAPIv1Base+"/tasks" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{
+						"id":          "111",
+						"content":     "Personal task 1",
+						"description": "Desc 1",
+						"checked":     false,
+						"url":         "https://app.todoist.com/app/task/111",
+					},
+					{
+						"id":          "222",
+						"content":     "Personal task 2",
+						"description": "Desc 2",
+						"checked":     false,
+					},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewTodoist(zerolog.Nop(), TodoistConfig{Token: "tok", BaseURL: srv.URL + testAPIv1Base})
+	tasks, err := p.ListActiveTasks(context.Background())
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+	assert.Equal(t, "111", tasks[0].ID)
+	assert.Equal(t, "Personal task 1", tasks[0].Title)
+	assert.Equal(t, "222", tasks[1].ID)
+	assert.Equal(t, "https://app.todoist.com/app/task/222", tasks[1].URL)
+}
+
+func TestTodoist_ListActiveTasksForProjects(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == testAPIv1Base+"/projects":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"id": "proj_123", "name": "Work"},
+					{"id": "proj_456", "name": "Personal"},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == testAPIv1Base+"/tasks":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{
+						"id":         "111",
+						"project_id": "proj_123",
+						"content":    "Work task",
+						"checked":    false,
+					},
+					{
+						"id":         "222",
+						"project_id": "proj_456",
+						"content":    "Personal task",
+						"checked":    false,
+					},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewTodoist(zerolog.Nop(), TodoistConfig{Token: "tok", BaseURL: srv.URL + testAPIv1Base})
+
+	// Filtering by project name "Work" should return only task 111
+	tasks, err := p.ListActiveTasksForProjects(context.Background(), []string{"Work"})
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "111", tasks[0].ID)
+	assert.Equal(t, "Work task", tasks[0].Title)
 }

@@ -24,7 +24,7 @@ func captureStdout(fn func()) string {
 	return buf.String()
 }
 
-func TestWrite_AIMode_StringOutputRawWithoutFences(t *testing.T) {
+func TestWrite_AIMode_StringOutputRawWithoutFences(t *testing.T) { //nolint:paralleltest
 	SetJSON(true)
 	defer SetJSON(false)
 
@@ -38,7 +38,7 @@ func TestWrite_AIMode_StringOutputRawWithoutFences(t *testing.T) {
 	assert.NotContains(t, got, "```json")
 }
 
-func TestWrite_AIMode_CompactJSONWithoutFences(t *testing.T) {
+func TestWrite_AIMode_CompactJSONWithoutFences(t *testing.T) { //nolint:paralleltest
 	SetJSON(true)
 	defer SetJSON(false)
 

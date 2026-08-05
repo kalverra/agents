@@ -3,7 +3,10 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/shurcooL/githubv4"
@@ -188,4 +191,153 @@ func FetchPR(ctx context.Context, client *githubv4.Client, owner, repo, branch s
 	}
 
 	return pr, nil
+}
+
+// PullRequestSummary represents a PR summary from GitHub search.
+type PullRequestSummary struct {
+	Number     int    `json:"number"`
+	Title      string `json:"title"`
+	Body       string `json:"body,omitempty"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	Repository string `json:"repository"`
+}
+
+// UserActivity contains GitHub activity for a user within a timeframe.
+type UserActivity struct {
+	PRsOpened []PullRequestSummary `json:"prs_opened"`
+	PRsMerged []PullRequestSummary `json:"prs_merged"`
+	PRReviews []PullRequestSummary `json:"pr_reviews"`
+}
+
+type ghSearchPRItem struct {
+	Number     int    `json:"number"`
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	Repository struct {
+		Name          string `json:"name"`
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
+}
+
+// FetchUserActivityWithCLI uses `gh search` to query recent PR activity for the authenticated GitHub user.
+func FetchUserActivityWithCLI(ctx context.Context, since time.Time) (*UserActivity, error) {
+	sinceStr := since.Format("2006-01-02")
+
+	// Search PRs authored by user updated since target date
+	//nolint:gosec
+	outAuthored, err := exec.CommandContext(ctx, "gh", "search", "prs", "--author", "@me", "--updated", ">="+sinceStr, "--json", "number,title,body,url,state,repository").
+		Output()
+
+	if err != nil {
+		return nil, fmt.Errorf("gh search prs --author: %w", err)
+	}
+
+	var itemsAuthored []ghSearchPRItem
+	if err := json.Unmarshal(outAuthored, &itemsAuthored); err != nil {
+		return nil, fmt.Errorf("parsing authored prs: %w", err)
+	}
+
+	act := &UserActivity{}
+	for _, item := range itemsAuthored {
+		repo := item.Repository.NameWithOwner
+		if repo == "" {
+			repo = item.Repository.Name
+		}
+		summary := PullRequestSummary{
+			Number:     item.Number,
+			Title:      item.Title,
+			Body:       item.Body,
+			URL:        item.URL,
+			State:      item.State,
+			Repository: repo,
+		}
+		if strings.EqualFold(item.State, "MERGED") {
+			act.PRsMerged = append(act.PRsMerged, summary)
+		} else {
+			act.PRsOpened = append(act.PRsOpened, summary)
+		}
+	}
+
+	// Search PRs reviewed / commented by user
+	//nolint:gosec
+	outReviewed, err := exec.CommandContext(ctx, "gh", "search", "prs", "--commenter", "@me", "--updated", ">="+sinceStr, "--json", "number,title,body,url,state,repository").
+		Output()
+
+	if err == nil {
+		var itemsReviewed []ghSearchPRItem
+		if err := json.Unmarshal(outReviewed, &itemsReviewed); err == nil {
+			for _, item := range itemsReviewed {
+				repo := item.Repository.NameWithOwner
+				if repo == "" {
+					repo = item.Repository.Name
+				}
+				act.PRReviews = append(act.PRReviews, PullRequestSummary{
+					Number:     item.Number,
+					Title:      item.Title,
+					Body:       item.Body,
+					URL:        item.URL,
+					State:      item.State,
+					Repository: repo,
+				})
+			}
+		}
+	}
+
+	return act, nil
+}
+
+// CommitSummary holds basic commit details from GitHub PR.
+type CommitSummary struct {
+	SHA     string `json:"sha"`
+	Date    string `json:"date"`
+	Message string `json:"message"`
+}
+
+type ghPRViewCommits struct {
+	Commits []struct {
+		Oid             string `json:"oid"`
+		CommittedDate   string `json:"committedDate"`
+		AuthoredDate    string `json:"authoredDate"`
+		MessageHeadline string `json:"messageHeadline"`
+	} `json:"commits"`
+}
+
+// FetchPRCommitsWithCLI queries commits on a PR using `gh pr view`.
+func FetchPRCommitsWithCLI(ctx context.Context, repo string, prNumber int) ([]CommitSummary, error) {
+	args := []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "commits"}
+	if repo != "" {
+		args = append(args, "--repo", repo)
+	}
+
+	out, err := exec.CommandContext(ctx, "gh", args...).Output() //nolint:gosec
+	if err != nil {
+		return nil, fmt.Errorf("gh pr view commits: %w", err)
+	}
+
+	var data ghPRViewCommits
+	if err := json.Unmarshal(out, &data); err != nil {
+		return nil, fmt.Errorf("parsing pr commits: %w", err)
+	}
+
+	var commits []CommitSummary
+	for _, c := range data.Commits {
+		sha := c.Oid
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		date := c.CommittedDate
+		if date == "" {
+			date = c.AuthoredDate
+		}
+		commits = append(commits, CommitSummary{
+			SHA:     sha,
+			Date:    date,
+			Message: c.MessageHeadline,
+		})
+	}
+
+	return commits, nil
 }

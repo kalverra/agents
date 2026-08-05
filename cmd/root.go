@@ -74,6 +74,7 @@ func init() {
 
 	rootCmd.AddCommand(skills.Cmd)
 	rootCmd.AddCommand(skills.TicketCmd)
+	rootCmd.AddCommand(skills.ActivityCmd)
 }
 
 // Execute runs the root command.

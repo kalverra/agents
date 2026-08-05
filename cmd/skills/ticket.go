@@ -1,10 +1,13 @@
 package skills
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
@@ -15,6 +18,7 @@ import (
 	"github.com/kalverra/agents/internal/ticket"
 )
 
+// TicketCmd is the root command for ticket operations.
 var TicketCmd = &cobra.Command{
 	Use:   "ticket",
 	Short: "Todoist and Jira issue helpers for session workflows",
@@ -64,7 +68,7 @@ var ticketFetchCmd = &cobra.Command{
 		// Write <ID>.md markdown file for AI agent context
 		fileName := tk.ID + ".md"
 		mdContent := ticket.TicketToMarkdownFile(tk)
-		_ = os.WriteFile(fileName, []byte(mdContent), 0644)
+		_ = os.WriteFile(fileName, []byte(mdContent), 0600)
 
 		payload := tk.ToFetchPayload()
 		if output.JSON() {
@@ -149,11 +153,12 @@ var ticketCommentCmd = &cobra.Command{
 
 var ticketCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Create a new Jira issue (defaults to Jira Cloud with --epic support; use --todoist for Todoist)",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Short: "Create a new issue/task (defaults to Jira Cloud in work repos, Todoist in personal repos; use --todoist or --jira to override)",
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		title, _ := cmd.Flags().GetString("title")
 		desc, _ := cmd.Flags().GetString("description")
 		useTodoist, _ := cmd.Flags().GetBool("todoist")
+		useJiraFlag, _ := cmd.Flags().GetBool("jira")
 		epicKey, _ := cmd.Flags().GetString("epic")
 		projectKey, _ := cmd.Flags().GetString("project")
 		issueType, _ := cmd.Flags().GetString("type")
@@ -162,6 +167,17 @@ var ticketCreateCmd = &cobra.Command{
 		cfg, loadErr := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
 		if loadErr != nil {
 			return loadErr
+		}
+
+		// Auto-default to Todoist in personal repos if neither --todoist nor --jira flag was explicitly set
+		if !useTodoist && !useJiraFlag {
+			repo, rErr := git.DetectRepo(".")
+			if rErr == nil && repo != nil {
+				isWork := ticket.IsWorkRepo(repo, cfg.WorkRepos)
+				if !isWork {
+					useTodoist = true
+				}
+			}
 		}
 
 		var tk *ticket.Ticket
@@ -213,7 +229,7 @@ var ticketCreateCmd = &cobra.Command{
 var ticketEpicsCmd = &cobra.Command{
 	Use:   "epics",
 	Short: "List active Jira Epics assigned to current user or updated recently",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		j, err := loadJira(cmd)
 		if err != nil {
 			return err
@@ -250,7 +266,7 @@ var ticketEpicsCmd = &cobra.Command{
 var ticketStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Inspect current working directory git repo, work status, and branch Jira ticket",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
@@ -260,44 +276,169 @@ var ticketStatusCmd = &cobra.Command{
 		isWork := false
 		jiraKey := ""
 		defaultBranch := ""
-		if repoErr == nil && repo != nil {
+		dirtyFiles := 0
+		untrackedFiles := 0
+		var warnings []string
+		var candidateEpics []*ticket.Ticket
+		var assignedTickets []*ticket.Ticket
+		var assignedTodoist []*ticket.Ticket
+		var matchedJira *ticket.Ticket
+		var matchedTodoist *ticket.Ticket
+
+		if repoErr != nil {
+			warnings = append(warnings, fmt.Sprintf("git repo detection: %v", repoErr))
+		} else if repo != nil {
 			isWork = ticket.IsWorkRepo(repo, cfg.WorkRepos)
 			jiraKey = ticket.ExtractJiraKey(repo.Branch)
 			defaultBranch, _ = git.DetectDefaultBranch(".")
+
+			d, u, wErr := git.WorktreeState(".")
+			if wErr != nil {
+				warnings = append(warnings, fmt.Sprintf("worktree state check failed: %v", wErr))
+			} else {
+				dirtyFiles = d
+				untrackedFiles = u
+			}
+		}
+
+		mode := "personal"
+		if isWork {
+			mode = "work"
 		}
 
 		ctx := cmd.Context()
-		var matchedTodoist *ticket.Ticket
-		var matchedJira *ticket.Ticket
-		var candidateEpics []*ticket.Ticket
-		var assignedTickets []*ticket.Ticket
 		writtenFile := ""
 
-		if jiraKey != "" {
-			if td, tErr := loadTodoist(cmd); tErr == nil {
-				matchedTodoist, _ = td.SearchTasksByJiraKey(ctx, jiraKey)
-			}
-			if j, jErr := loadJira(cmd); jErr == nil {
-				matchedJira, _ = j.Fetch(ctx, jiraKey)
-			}
+		if isWork {
+			if jiraKey != "" {
+				j, jErr := loadJira(cmd)
+				if jErr != nil {
+					warnings = append(warnings, fmt.Sprintf("jira load failed: %v", jErr))
+				} else {
+					matchedJira, err = j.Fetch(ctx, jiraKey)
+					if err != nil {
+						warnings = append(warnings, fmt.Sprintf("jira fetch failed: %v", err))
+					}
+				}
+				if td, tErr := loadTodoist(cmd); tErr == nil {
+					matchedTodoist, _ = td.SearchTasksByJiraKey(ctx, jiraKey)
+				}
 
-			// Automatically write <KEY>.md file if ticket data is fetched
-			var targetTicket *ticket.Ticket
-			if matchedJira != nil {
-				targetTicket = matchedJira
-			} else if matchedTodoist != nil {
-				targetTicket = matchedTodoist
+				// Automatically write <KEY>.md file if ticket data is fetched
+				var targetTicket *ticket.Ticket
+				if matchedJira != nil {
+					targetTicket = matchedJira
+				} else if matchedTodoist != nil {
+					targetTicket = matchedTodoist
+				}
+				if targetTicket != nil {
+					writtenFile = jiraKey + ".md"
+					mdContent := ticket.TicketToMarkdownFile(targetTicket)
+					_ = os.WriteFile(writtenFile, []byte(mdContent), 0600)
+				}
+			} else {
+				branchName := ""
+				if repo != nil {
+					branchName = repo.Branch
+				}
+				if w := dirtyDefaultBranchWarning(dirtyFiles, untrackedFiles, branchName, defaultBranch); w != "" {
+					warnings = append(warnings, w)
+				}
+				j, jErr := loadJira(cmd)
+				if jErr != nil {
+					warnings = append(warnings, fmt.Sprintf("jira load failed: %v", jErr))
+				} else {
+					epics, eErr := j.ListEpics(ctx)
+					if eErr != nil {
+						warnings = append(warnings, fmt.Sprintf("failed to list epics: %v", eErr))
+					} else {
+						candidateEpics = epics
+					}
+
+					assigned, aErr := j.ListAssignedTickets(ctx)
+					if aErr != nil {
+						warnings = append(warnings, fmt.Sprintf("failed to list assigned tickets: %v", aErr))
+					} else {
+						assignedTickets = assigned
+					}
+				}
 			}
-			if targetTicket != nil {
-				writtenFile = jiraKey + ".md"
-				mdContent := ticket.TicketToMarkdownFile(targetTicket)
-				_ = os.WriteFile(writtenFile, []byte(mdContent), 0644)
+		} else { // personal mode
+			td, tErr := loadTodoist(cmd)
+			if tErr != nil {
+				warnings = append(warnings, fmt.Sprintf("todoist load failed: %v", tErr))
+			} else {
+				if jiraKey != "" {
+					matchedTodoist, _ = td.SearchTasksByJiraKey(ctx, jiraKey)
+				}
+				if matchedTodoist == nil && repo != nil {
+					if taskRef, rErr := ticket.ParseTaskRef(repo.Branch); rErr == nil && taskRef != "" {
+						matchedTodoist, _ = td.Fetch(ctx, taskRef)
+					}
+				}
+				if matchedTodoist != nil {
+					writtenFile = matchedTodoist.ID + ".md"
+					mdContent := ticket.TicketToMarkdownFile(matchedTodoist)
+					_ = os.WriteFile(writtenFile, []byte(mdContent), 0600)
+				} else {
+					projectsFilter, _ := cmd.Flags().GetStringSlice("projects")
+					if len(projectsFilter) == 0 {
+						projectsFilter = cfg.TodoistProjects
+					}
+					activeTasks, lErr := td.ListActiveTasksForProjects(ctx, projectsFilter)
+					if lErr != nil {
+						warnings = append(warnings, fmt.Sprintf("failed to list todoist tasks: %v", lErr))
+					} else {
+						assignedTodoist = activeTasks
+					}
+				}
 			}
-		} else if isWork {
-			if j, jErr := loadJira(cmd); jErr == nil {
-				candidateEpics, _ = j.ListEpics(ctx)
-				assignedTickets, _ = j.ListAssignedTickets(ctx)
-			}
+		}
+
+		repoOwner := ""
+		repoName := ""
+		repoBranch := ""
+		if repo != nil {
+			repoOwner = repo.Owner
+			repoName = repo.Name
+			repoBranch = repo.Branch
+		}
+
+		targetTicket := matchedJira
+		if targetTicket == nil {
+			targetTicket = matchedTodoist
+		}
+
+		needsTicketDecision := false
+		if mode == "work" {
+			needsTicketDecision = (jiraKey == "")
+		} else {
+			needsTicketDecision = (targetTicket == nil)
+		}
+
+		payload := ticket.StatusPayload{
+			Mode:                 mode,
+			RepoOwner:            repoOwner,
+			RepoName:             repoName,
+			Branch:               repoBranch,
+			IsWork:               isWork,
+			DefaultBranch:        defaultBranch,
+			DirtyFiles:           dirtyFiles,
+			UntrackedFiles:       untrackedFiles,
+			OnTicketBranch:       targetTicket != nil || jiraKey != "",
+			TicketFound:          targetTicket != nil,
+			NeedsTicketDecision:  needsTicketDecision,
+			Ticket:               targetTicket,
+			CandidateEpics:       candidateEpics,
+			AssignedTickets:      assignedTickets,
+			AssignedTodoistTasks: assignedTodoist,
+			Warnings:             warnings,
+		}
+
+		if output.JSON() {
+			outXML := ticket.StatusPayloadToAIXML(payload)
+			output.Write("ticket-status", outXML, nil)
+			return nil
 		}
 
 		var b strings.Builder
@@ -305,12 +446,18 @@ var ticketStatusCmd = &cobra.Command{
 			b.WriteString("Git status: Not in a git repository\n")
 		} else {
 			fmt.Fprintf(&b, "Repo:        %s/%s\n", repo.Owner, repo.Name)
+			fmt.Fprintf(&b, "Mode:        %s\n", mode)
 			fmt.Fprintf(&b, "Branch:      %s\n", formatBranchOutput(repo.Branch, defaultBranch))
 			fmt.Fprintf(&b, "Is Work:     %t\n", isWork)
 			if jiraKey != "" {
 				fmt.Fprintf(&b, "Jira Key:    %s\n", jiraKey)
 			} else {
 				b.WriteString("Jira Key:    (none)\n")
+			}
+			if dirtyFiles > 0 || untrackedFiles > 0 {
+				fmt.Fprintf(&b, "Worktree:    dirty (%d modified, %d untracked)\n", dirtyFiles, untrackedFiles)
+			} else {
+				b.WriteString("Worktree:    clean\n")
 			}
 			if writtenFile != "" {
 				fmt.Fprintf(&b, "Ticket File: ./%s\n", writtenFile)
@@ -321,16 +468,58 @@ var ticketStatusCmd = &cobra.Command{
 			if matchedJira != nil {
 				fmt.Fprintf(&b, "Jira Ticket: %s (%s)\n", matchedJira.Title, matchedJira.URL)
 			}
-			if len(candidateEpics) > 0 {
-				b.WriteString("\nActive Epics:\n")
-				for _, e := range candidateEpics {
-					fmt.Fprintf(&b, "  - %s: %s [%s]\n", e.ID, e.Title, e.Status)
+			if len(warnings) > 0 {
+				b.WriteString("\nWarnings:\n")
+				for _, w := range warnings {
+					fmt.Fprintf(&b, "  - %s\n", w)
 				}
 			}
-			if len(assignedTickets) > 0 {
+			if len(candidateEpics) > 0 || len(assignedTickets) > 0 {
 				b.WriteString("\nAssigned Tickets:\n")
-				for _, t := range assignedTickets {
-					fmt.Fprintf(&b, "  - %s: %s [%s]\n", t.ID, t.Title, t.Status)
+				b.WriteString(formatTicketTree(candidateEpics, assignedTickets))
+			}
+			if len(assignedTodoist) > 0 {
+				b.WriteString("\nActive Todoist Tasks:\n")
+				projMap := make(map[string][]*ticket.Ticket)
+				var projOrder []string
+				var unassigned []*ticket.Ticket
+				for _, t := range assignedTodoist {
+					pName := t.ProjectName
+					if pName == "" {
+						pName = t.ProjectID
+					}
+					if pName == "" {
+						unassigned = append(unassigned, t)
+						continue
+					}
+					if _, exists := projMap[pName]; !exists {
+						projOrder = append(projOrder, pName)
+					}
+					projMap[pName] = append(projMap[pName], t)
+				}
+				for _, pName := range projOrder {
+					tasks := projMap[pName]
+					slices.SortFunc(tasks, func(a, b *ticket.Ticket) int {
+						return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
+					})
+					fmt.Fprintf(&b, "  %s:\n", pName)
+					for _, t := range tasks {
+						updatedStr := ""
+						if rel := ticket.FormatRelativeTime(t.UpdatedAt, time.Now()); rel != "" {
+							updatedStr = fmt.Sprintf(" [%s]", rel)
+						}
+						fmt.Fprintf(&b, "    - %s: %s%s\n", t.ID, t.Title, updatedStr)
+					}
+				}
+				slices.SortFunc(unassigned, func(a, b *ticket.Ticket) int {
+					return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
+				})
+				for _, t := range unassigned {
+					updatedStr := ""
+					if rel := ticket.FormatRelativeTime(t.UpdatedAt, time.Now()); rel != "" {
+						updatedStr = fmt.Sprintf(" [%s]", rel)
+					}
+					fmt.Fprintf(&b, "  - %s: %s%s\n", t.ID, t.Title, updatedStr)
 				}
 			}
 		}
@@ -341,6 +530,82 @@ var ticketStatusCmd = &cobra.Command{
 		})
 		return nil
 	},
+}
+
+type epicNode struct {
+	id      string
+	title   string
+	status  string
+	tickets []*ticket.Ticket
+}
+
+func formatTicketTree(epics []*ticket.Ticket, assignedTickets []*ticket.Ticket) string {
+	var b strings.Builder
+
+	epicMap := make(map[string]*epicNode)
+	var epicOrder []string
+
+	for _, e := range epics {
+		if e == nil {
+			continue
+		}
+		if _, exists := epicMap[e.ID]; !exists {
+			epicMap[e.ID] = &epicNode{
+				id:     e.ID,
+				title:  e.Title,
+				status: e.Status,
+			}
+			epicOrder = append(epicOrder, e.ID)
+		}
+	}
+
+	var standaloneTickets []*ticket.Ticket
+
+	for _, t := range assignedTickets {
+		if t == nil {
+			continue
+		}
+		if t.ParentID != "" {
+			node, exists := epicMap[t.ParentID]
+			if !exists {
+				node = &epicNode{
+					id:    t.ParentID,
+					title: t.ParentTitle,
+				}
+				epicMap[t.ParentID] = node
+				epicOrder = append(epicOrder, t.ParentID)
+			}
+			node.tickets = append(node.tickets, t)
+		} else {
+			standaloneTickets = append(standaloneTickets, t)
+		}
+	}
+
+	for _, epicID := range epicOrder {
+		node := epicMap[epicID]
+		title := node.title
+		if title == "" {
+			title = node.id
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", node.id, title)
+		for _, t := range node.tickets {
+			statusStr := ""
+			if t.Status != "" {
+				statusStr = fmt.Sprintf(" [%s]", t.Status)
+			}
+			fmt.Fprintf(&b, "  - %s: %s%s\n", t.ID, t.Title, statusStr)
+		}
+	}
+
+	for _, t := range standaloneTickets {
+		statusStr := ""
+		if t.Status != "" {
+			statusStr = fmt.Sprintf(" [%s]", t.Status)
+		}
+		fmt.Fprintf(&b, "- %s: %s%s\n", t.ID, t.Title, statusStr)
+	}
+
+	return b.String()
 }
 
 func loadTodoist(cmd *cobra.Command) (*ticket.Todoist, error) {
@@ -402,6 +667,13 @@ func formatBranchOutput(currentBranch, defaultBranch string) string {
 	return currentBranch
 }
 
+func dirtyDefaultBranchWarning(dirtyFiles, untrackedFiles int, branch, defaultBranch string) string {
+	if (dirtyFiles > 0 || untrackedFiles > 0) && defaultBranch != "" && branch == defaultBranch {
+		return fmt.Sprintf("uncommitted work on default branch %q without Jira ticket", defaultBranch)
+	}
+	return ""
+}
+
 func init() {
 	ticketFetchCmd.Flags().Bool("jira", false, "Force fetch directly from Jira Cloud")
 
@@ -416,6 +688,8 @@ func init() {
 	ticketCreateCmd.Flags().String("project", "", "Jira project key (defaults to JIRA_DEFAULT_PROJECT or DX)")
 	ticketCreateCmd.Flags().String("type", "Task", "Jira issue type")
 	ticketCreateCmd.Flags().Bool("todoist", false, "Create task in Todoist instead of Jira Cloud")
+
+	ticketStatusCmd.Flags().StringSlice("projects", nil, "Filter personal Todoist tasks by project names or IDs")
 
 	TicketCmd.AddCommand(ticketFetchCmd, ticketCommentCmd, ticketCreateCmd, ticketStatusCmd, ticketEpicsCmd)
 	Cmd.AddCommand(TicketCmd)

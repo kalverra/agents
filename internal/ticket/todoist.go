@@ -215,10 +215,13 @@ type todoistCommentV1 struct {
 
 type todoistTaskV1 struct {
 	ID          string `json:"id"`
+	ProjectID   string `json:"project_id,omitempty"`
 	Content     string `json:"content"`
 	Description string `json:"description"`
 	URL         string `json:"url,omitempty"`
 	Checked     bool   `json:"checked"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
 }
 
 func (tr todoistTaskV1) status() string {
@@ -365,4 +368,219 @@ func (t *Todoist) SearchTasksByJiraKey(ctx context.Context, jiraKey string) (*Ti
 	}
 
 	return nil, fmt.Errorf("no todoist task found matching jira key %s", jiraKey)
+}
+
+// ListActiveTasks retrieves uncompleted tasks from Todoist.
+func (t *Todoist) ListActiveTasks(ctx context.Context) ([]*Ticket, error) {
+	if strings.TrimSpace(t.cfg.Token) == "" {
+		return nil, fmt.Errorf("TODOIST_API_TOKEN is required")
+	}
+
+	resp, err := t.client.R().
+		SetContext(ctx).
+		Get("/tasks")
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsStatusFailure() {
+		return nil, fmt.Errorf("todoist GET tasks: %s: %s", resp.Status(), strings.TrimSpace(resp.String()))
+	}
+
+	var tasksList struct {
+		Results []todoistTaskV1 `json:"results"`
+	}
+	if err := json.Unmarshal(resp.Bytes(), &tasksList); err != nil || len(tasksList.Results) == 0 {
+		var rawList []todoistTaskV1
+		if err := json.Unmarshal(resp.Bytes(), &rawList); err == nil {
+			tasksList.Results = rawList
+		}
+	}
+
+	projMap, _ := t.FetchProjectsMap(ctx)
+
+	var out []*Ticket
+	for _, task := range tasksList.Results {
+		if task.Checked {
+			continue
+		}
+		taskURL := strings.TrimSpace(task.URL)
+		if taskURL == "" {
+			taskURL = "https://app.todoist.com/app/task/" + task.ID
+		}
+		updatedAt := task.UpdatedAt
+		if updatedAt == "" {
+			updatedAt = task.CreatedAt
+		}
+		out = append(out, &Ticket{
+			ID:          task.ID,
+			Title:       task.Content,
+			Description: task.Description,
+			Status:      task.status(),
+			URL:         taskURL,
+			ProjectID:   task.ProjectID,
+			ProjectName: projMap[task.ProjectID],
+			UpdatedAt:   updatedAt,
+		})
+	}
+
+	return out, nil
+}
+
+// ListActiveTasksForProjects retrieves uncompleted tasks from Todoist, filtered by project names or IDs.
+func (t *Todoist) ListActiveTasksForProjects(ctx context.Context, projects []string) ([]*Ticket, error) {
+	tasks, err := t.ListActiveTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(projects) == 0 {
+		return tasks, nil
+	}
+
+	targetIDs := make(map[string]bool)
+	for _, p := range projects {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		projID, err := t.GetProjectIDByName(ctx, p)
+		if err == nil && projID != "" {
+			targetIDs[projID] = true
+		}
+		targetIDs[p] = true
+	}
+
+	var filtered []*Ticket
+	for _, tk := range tasks {
+		if targetIDs[tk.ProjectID] {
+			filtered = append(filtered, tk)
+		}
+	}
+	return filtered, nil
+}
+
+// TodoistCompletedTask represents a completed item returned by Todoist.
+type TodoistCompletedTask struct {
+	ID          string   `json:"id"`
+	Content     string   `json:"content"`
+	Description string   `json:"description"`
+	CompletedAt string   `json:"completed_at"`
+	Labels      []string `json:"labels"`
+	URL         string   `json:"url"`
+}
+
+// FetchProjectsMap returns a map of project_id -> project_name.
+func (t *Todoist) FetchProjectsMap(ctx context.Context) (map[string]string, error) {
+	if strings.TrimSpace(t.cfg.Token) == "" {
+		return nil, fmt.Errorf("TODOIST_API_TOKEN is required")
+	}
+
+	resp, err := t.client.R().
+		SetContext(ctx).
+		Get("/projects")
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsStatusFailure() {
+		return nil, fmt.Errorf("todoist GET projects: %s: %s", resp.Status(), strings.TrimSpace(resp.String()))
+	}
+
+	var projectsList struct {
+		Results []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(resp.Bytes(), &projectsList); err != nil || len(projectsList.Results) == 0 {
+		var rawList []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(resp.Bytes(), &rawList); err == nil {
+			projectsList.Results = rawList
+		}
+	}
+
+	out := make(map[string]string)
+	for _, p := range projectsList.Results {
+		if p.ID != "" {
+			out[p.ID] = p.Name
+		}
+	}
+	return out, nil
+}
+
+// GetProjectIDByName fetches all Todoist projects and returns the ID of the project matching name (case-insensitive).
+func (t *Todoist) GetProjectIDByName(ctx context.Context, name string) (string, error) {
+	pm, err := t.FetchProjectsMap(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	for id, projName := range pm {
+		if strings.EqualFold(strings.TrimSpace(projName), strings.TrimSpace(name)) {
+			return id, nil
+		}
+	}
+
+	return "", fmt.Errorf("project %q not found in Todoist", name)
+}
+
+// FetchCompletedTasks retrieves completed tasks for a given project.
+func (t *Todoist) FetchCompletedTasks(ctx context.Context, projectID string) ([]TodoistCompletedTask, error) {
+	if strings.TrimSpace(t.cfg.Token) == "" {
+		return nil, fmt.Errorf("TODOIST_API_TOKEN is required")
+	}
+
+	req := t.client.R().SetContext(ctx)
+	if projectID != "" {
+		req.SetQueryParam("project_id", projectID)
+	}
+
+	resp, err := req.Get("/tasks/completed")
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsStatusFailure() {
+		// Fallback: If /tasks/completed is unavailable, try returning empty list without failing
+		return nil, fmt.Errorf("todoist GET tasks/completed: %s: %s", resp.Status(), strings.TrimSpace(resp.String()))
+	}
+
+	var page struct {
+		Items []struct {
+			ID          string   `json:"id"`
+			Content     string   `json:"content"`
+			Description string   `json:"description"`
+			CompletedAt string   `json:"completed_at"`
+			Labels      []string `json:"labels"`
+			URL         string   `json:"url"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(resp.Bytes(), &page); err != nil {
+		// Try unmarshaling raw array if direct list returned
+		var rawItems []struct {
+			ID          string   `json:"id"`
+			Content     string   `json:"content"`
+			Description string   `json:"description"`
+			CompletedAt string   `json:"completed_at"`
+			Labels      []string `json:"labels"`
+			URL         string   `json:"url"`
+		}
+		if err := json.Unmarshal(resp.Bytes(), &rawItems); err == nil {
+			page.Items = rawItems
+		}
+	}
+
+	out := make([]TodoistCompletedTask, len(page.Items))
+	for i, item := range page.Items {
+		out[i] = TodoistCompletedTask{
+			ID:          item.ID,
+			Content:     item.Content,
+			Description: item.Description,
+			CompletedAt: item.CompletedAt,
+			Labels:      item.Labels,
+			URL:         item.URL,
+		}
+	}
+
+	return out, nil
 }

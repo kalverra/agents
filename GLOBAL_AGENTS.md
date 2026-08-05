@@ -34,10 +34,6 @@ Drop caveman when:
 - Writing or formatting code
 </personality>
 
-<session-start>
-At the start of every session, run `~/.agents/agents ticket status --ai-output` to see current ticket context. Run `/ticket` skill for more detail.
-</session-start>
-
 <style>
 Programming red-green TDD:
 1 Write a failing test
@@ -68,7 +64,7 @@ Example: `/Users/adamhamrick/Projects/chainlink` → `Users-adamhamrick-Projects
 8. **Complex audits** — `query_graph` with read-only Cypher (e.g. dead code: `WHERE NOT EXISTS { (f)<-[:CALLS]-() }`). No write/`MERGE`/`CALL` clauses.
 </rule>
 
-<rule name="git-commit">
+<rule name="dont-commit">
 Cannot use `git commit` directly. Either:
 1. Ask user to commit for you
 2. If explicitly instructed by the user to commit, do so with `--no-gpg-sign` flag. e.g. `git commit --no-gpg-sign -m "Commit message"`
@@ -76,12 +72,7 @@ Cannot use `git commit` directly. Either:
 <rule name="rg">
 Prefer `rg` over `grep` for search.
 </rule>
-<rule name="work-ticketing">
-1. Check `agents ticket status --ai-output` at session start. Invoking `/ticket` skill starts/re-triggers this flow.
-2. If branch matches a Jira ticket, `agents ticket status` automatically writes `./<KEY>.md` ticket context file. Read `./<KEY>.md` to ground work.
-3. If in a work repo with no ticket matching branch, `agents ticket status` automatically displays assigned active Epics and assigned active tickets.
-4. Ground work in a single, manageable ticket unit. Prompt for user approval before creating a new Epic-linked Jira ticket (`agents ticket create --title "..." --epic EPIC_KEY`).
-5. Default progress comments to personal Todoist (`agents ticket comment [REF] --body "..."`) to keep public Jira clean. When prompted by user to update Jira, synthesize Todoist notes & session work into a colleague/manager-facing summary and get explicit user approval before posting (`agents ticket comment <KEY> --jira --body "..."`).
-6. If tangent or scope creep arises, prompt user to create a new Epic-linked ticket instead of stuffing it into current ticket.
+<rule name="ticket-status">
+If `<ticket_status>` XML is not already injected in context, run `~/.agents/agents ticket status --ai-output`. If `<ticket_status>` is already present, do NOT repeat the command.
 </rule>
 </tools>
