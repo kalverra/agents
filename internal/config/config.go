@@ -33,6 +33,37 @@ type Config struct {
 
 	// WorkRepos is a list of organization wildcards or owner/repo paths representing work repositories. Env: WORK_REPOS.
 	WorkRepos []string `mapstructure:"work_repos"`
+
+	// ActivityAgentCmd is the AI agent CLI used for activity reviews (default "agy"). Env: ACTIVITY_AGENT_CMD.
+	ActivityAgentCmd string `mapstructure:"activity_agent_cmd"`
+	// ActivityAgentArgs are extra arguments passed to the agent CLI. Use {{MODEL}} placeholder. Env: ACTIVITY_AGENT_ARGS.
+	ActivityAgentArgs string `mapstructure:"activity_agent_args"`
+	// ActivityLLMProvider selects the LLM backend: "agy" or "llama" (default "agy"). Env: ACTIVITY_LLM_PROVIDER.
+	ActivityLLMProvider string `mapstructure:"activity_llm_provider"`
+	// ActivityModel is the model identifier passed to the agent (default "gpt-oss-120b-medium"). Env: ACTIVITY_MODEL.
+	ActivityModel string `mapstructure:"activity_model"`
+	// ActivityLlamaCmd is the llama.cpp CLI binary used when provider is "llama" (default "llama-cli"). Env: ACTIVITY_LLAMA_CMD.
+	ActivityLlamaCmd string `mapstructure:"activity_llama_cmd"`
+	// ActivityLlamaArgs are extra arguments passed to the llama.cpp CLI. Env: ACTIVITY_LLAMA_ARGS.
+	ActivityLlamaArgs string `mapstructure:"activity_llama_args"`
+	// ActivityOllamaHost is the host:port for Ollama HTTP server. Env: ACTIVITY_OLLAMA_HOST.
+	ActivityOllamaHost string `mapstructure:"activity_ollama_host"`
+	// ActivityWindowsMAC is the MAC address for sending WoL packets. Env: ACTIVITY_WINDOWS_MAC.
+	ActivityWindowsMAC string `mapstructure:"activity_windows_mac"`
+	// ActivityReportsDir is where generated reports are saved. Env: ACTIVITY_REPORTS_DIR.
+	ActivityReportsDir string `mapstructure:"activity_reports_dir"`
+	// ActivityPromptsDir is where custom prompt markdown files live. Env: ACTIVITY_PROMPTS_DIR.
+	ActivityPromptsDir string `mapstructure:"activity_prompts_dir"`
+	// ActivityProject is the Todoist project name for work reports (default "Work"). Env: ACTIVITY_PROJECT.
+	ActivityProject string `mapstructure:"activity_project"`
+	// ActivityScheduleDaily is when the daily report runs (e.g. "weekday:09:30"). Env: ACTIVITY_SCHEDULE_DAILY.
+	ActivityScheduleDaily string `mapstructure:"activity_schedule_daily"`
+	// ActivityScheduleWeekly is when the weekly report runs (e.g. "fri:15:30"). Env: ACTIVITY_SCHEDULE_WEEKLY.
+	ActivityScheduleWeekly string `mapstructure:"activity_schedule_weekly"`
+	// ActivityScheduleMonthly is when the monthly report runs (e.g. "28:17:00"). Env: ACTIVITY_SCHEDULE_MONTHLY.
+	ActivityScheduleMonthly string `mapstructure:"activity_schedule_monthly"`
+	// ActivityScheduleQuarterly is when the quarterly report runs (e.g. "28:17:00"). Env: ACTIVITY_SCHEDULE_QUARTERLY.
+	ActivityScheduleQuarterly string `mapstructure:"activity_schedule_quarterly"`
 }
 
 const (

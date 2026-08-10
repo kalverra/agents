@@ -8,6 +8,7 @@
 GLOBAL_AGENTS.md - machine-wide context to dictate universal rules + personality
 USER_AGENTS.md - more private details to inject in GLOBAL_AGENTS.md
 skills/ - Markdown skills for agents to use.
+prompts/ - Markdown prompt templates for automated activity reports.
 cmd/ - Go CLI entry
 internal/ - Go CLI internals
 </important-files>

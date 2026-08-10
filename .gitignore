@@ -11,7 +11,9 @@ eval_results.json
 eval_spend.json
 eval/local.jsonl
 eval/archive/
+eval/live_feedback/
 eval/new_results.json
+reports/
 
 # Secrets
 .gemini/

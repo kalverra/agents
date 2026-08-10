@@ -363,3 +363,47 @@ func TestFormatXMLReport_WithPRDescription(t *testing.T) {
 	assert.Contains(t, xml, `<description>Added PR body description for context</description>`)
 	assert.Contains(t, xml, `<description>Merged PR description context</description>`)
 }
+
+func TestCleanPRDescription(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "Remove HTML comments",
+			input: "<!-- template comment -->PR summary",
+			want:  "PR summary",
+		},
+		{
+			name:  "Remove markdown and HTML images",
+			input: "Before ![screenshot](https://example.com/img.png) middle <img src=\"http://example.com/pic.jpg\" width=\"100\"> after",
+			want:  "Before middle after",
+		},
+		{
+			name:  "Remove raw URLs and replace markdown links with anchor text",
+			input: "See [PR #12](https://github.com/org/repo/pull/12) and raw https://example.com/link",
+			want:  "See PR #12 and raw",
+		},
+		{
+			name:  "Strip HTML tags",
+			input: "<details><summary>Notes</summary><div>Detailed info</div></details>",
+			want:  "NotesDetailed info",
+		},
+		{
+			name:  "Trim excess whitespace and blank lines",
+			input: "Line 1\n\n\n\nLine 2  \n  \nLine 3",
+			want:  "Line 1\n\nLine 2\n\nLine 3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := activity.CleanPRDescription(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

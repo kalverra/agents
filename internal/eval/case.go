@@ -39,7 +39,7 @@ type Criteria struct {
 	Score5      string `yaml:"score_5"`
 }
 
-// LoadCases reads all YAML test cases from dir, optionally filtering by tag.
+// LoadCases reads all YAML test cases and JSON live feedback records from dir, optionally filtering by tag.
 func LoadCases(dir, tagFilter string) ([]Case, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -48,7 +48,7 @@ func LoadCases(dir, tagFilter string) ([]Case, error) {
 
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
+		if !e.IsDir() && (strings.HasSuffix(e.Name(), ".yaml") || strings.HasSuffix(e.Name(), ".json")) {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}
@@ -56,14 +56,23 @@ func LoadCases(dir, tagFilter string) ([]Case, error) {
 
 	var cases []Case
 	for _, f := range files {
-		data, err := os.ReadFile(f) //nolint:gosec
-		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", f, err)
-		}
 		var c Case
-		if err := yaml.Unmarshal(data, &c); err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", f, err)
+		if strings.HasSuffix(f, ".json") {
+			rec, err := LoadLiveFeedback(f)
+			if err != nil {
+				return nil, fmt.Errorf("parsing live feedback %s: %w", f, err)
+			}
+			c = ConvertLiveToCase(rec)
+		} else {
+			data, err := os.ReadFile(f) //nolint:gosec
+			if err != nil {
+				return nil, fmt.Errorf("reading %s: %w", f, err)
+			}
+			if err := yaml.Unmarshal(data, &c); err != nil {
+				return nil, fmt.Errorf("parsing %s: %w", f, err)
+			}
 		}
+
 		c.FileName = filepath.Base(f)
 		if c.Name == "" {
 			c.Name = c.FileName

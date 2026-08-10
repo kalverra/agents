@@ -12,7 +12,46 @@ import (
 	"github.com/kalverra/agents/internal/ticket"
 )
 
-var jiraKeyRegex = regexp.MustCompile(`\[([A-Z0-9]+-\d+)\]|([A-Z0-9]+-\d+)`)
+var (
+	jiraKeyRegex     = regexp.MustCompile(`\[([A-Z0-9]+-\d+)\]|([A-Z0-9]+-\d+)`)
+	htmlCommentRegex = regexp.MustCompile(`<!--[\s\S]*?-->`)
+	mdImageRegex     = regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`)
+	htmlImageRegex   = regexp.MustCompile(`(?i)<img[^>]*>`)
+	mdLinkRegex      = regexp.MustCompile(`\[([^\]]+)\]\([^\)]+\)`)
+	rawURLRegex      = regexp.MustCompile(`https?://\S+`)
+	htmlTagRegex     = regexp.MustCompile(`(?i)<[/]?[a-z1-6]+[^>]*>`)
+	spaceRegex       = regexp.MustCompile(`[ \t]+`)
+)
+
+// CleanPRDescription removes bloat (HTML comments, images, raw URLs, HTML tags, excess whitespace) from GitHub PR descriptions.
+func CleanPRDescription(body string) string {
+	if body == "" {
+		return ""
+	}
+	body = htmlCommentRegex.ReplaceAllString(body, "")
+	body = mdImageRegex.ReplaceAllString(body, "")
+	body = htmlImageRegex.ReplaceAllString(body, "")
+	body = mdLinkRegex.ReplaceAllString(body, "$1")
+	body = rawURLRegex.ReplaceAllString(body, "")
+	body = htmlTagRegex.ReplaceAllString(body, "")
+
+	lines := strings.Split(body, "\n")
+	var cleanedLines []string
+	lastWasEmpty := false
+
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(spaceRegex.ReplaceAllString(l, " "))
+		if trimmed != "" {
+			cleanedLines = append(cleanedLines, trimmed)
+			lastWasEmpty = false
+		} else if !lastWasEmpty && len(cleanedLines) > 0 {
+			cleanedLines = append(cleanedLines, "")
+			lastWasEmpty = true
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(cleanedLines, "\n"))
+}
 
 // ParseTimestamp attempts to parse common Jira and ISO-8601 timestamp formats.
 func ParseTimestamp(ts string) (time.Time, bool) {
@@ -334,14 +373,16 @@ func writePROpenedXML(b *strings.Builder, pr PullRequestInfo) {
 		prAttrs += fmt.Sprintf(` task_id=%q`, pr.TaskID)
 	}
 
-	if len(pr.Commits) == 0 && pr.Body == "" {
+	body := CleanPRDescription(pr.Body)
+
+	if len(pr.Commits) == 0 && body == "" {
 		fmt.Fprintf(b, "      <pr %s>%s</pr>\n", prAttrs, escapeXML(pr.Title))
 		return
 	}
 
 	fmt.Fprintf(b, "      <pr %s>\n        <title>%s</title>\n", prAttrs, escapeXML(pr.Title))
-	if pr.Body != "" {
-		fmt.Fprintf(b, "        <description>%s</description>\n", escapeXML(pr.Body))
+	if body != "" {
+		fmt.Fprintf(b, "        <description>%s</description>\n", escapeXML(body))
 	}
 	if len(pr.Commits) > 0 {
 		b.WriteString("        <commits>\n")
@@ -368,7 +409,8 @@ func writePRMergedXML(b *strings.Builder, pr PullRequestInfo) {
 	if pr.TaskID != "" {
 		prAttrs += fmt.Sprintf(` task_id=%q`, pr.TaskID)
 	}
-	if pr.Body == "" {
+	body := CleanPRDescription(pr.Body)
+	if body == "" {
 		fmt.Fprintf(b, "      <pr %s>%s</pr>\n", prAttrs, escapeXML(pr.Title))
 	} else {
 		fmt.Fprintf(
@@ -376,7 +418,7 @@ func writePRMergedXML(b *strings.Builder, pr PullRequestInfo) {
 			"      <pr %s>\n        <title>%s</title>\n        <description>%s</description>\n      </pr>\n",
 			prAttrs,
 			escapeXML(pr.Title),
-			escapeXML(pr.Body),
+			escapeXML(body),
 		)
 	}
 }

@@ -65,6 +65,102 @@ type fileEntry struct {
 	binary    bool
 }
 
+// StagedDiff returns changes staged for commit (git diff --cached).
+func StagedDiff(dir string, opts BranchDiffOptions) (*BranchDiffResult, error) {
+	repoPath, err := gitOutput(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, fmt.Errorf("not a git repository (or any parent): %w", err)
+	}
+
+	currentBranch, _ := gitOutput(dir, "branch", "--show-current")
+	headCommit, _ := gitOutput(dir, "rev-parse", "HEAD")
+
+	nameStatusOut, err := gitOutput(dir, "diff", "--cached", "--name-status", "--no-renames", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("reading staged diff name status: %w", err)
+	}
+	trackedChanges := parseNameStatus(nameStatusOut)
+
+	numstatOut, err := gitOutput(dir, "diff", "--cached", "--numstat", "--no-renames", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("reading staged diff numstat: %w", err)
+	}
+	trackedStats := parseNumstat(numstatOut)
+
+	contextLines := opts.ContextLines
+	if contextLines <= 0 {
+		contextLines = 3
+	}
+
+	combinedDiff, err := gitOutput(dir, "diff", "--cached", "--no-renames", fmt.Sprintf("-U%d", contextLines))
+	if err != nil {
+		return nil, fmt.Errorf("running git diff --cached: %w", err)
+	}
+	filePatches := parseCombinedDiff(combinedDiff, trackedChanges)
+
+	allFiles := make(map[string]fileEntry)
+	for _, tc := range trackedChanges {
+		stats := trackedStats[tc.path]
+		patch := filePatches[tc.path]
+
+		status := tc.status
+		if stats.binary {
+			status = "binary"
+		}
+
+		allFiles[tc.path] = fileEntry{
+			path:      tc.path,
+			status:    status,
+			additions: stats.additions,
+			deletions: stats.deletions,
+			patch:     patch,
+			binary:    stats.binary,
+		}
+	}
+
+	var paths []string
+	for path := range allFiles {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	fileDiffs := make([]FileDiff, 0, len(paths))
+	var stats DiffStats
+	var patchBuf strings.Builder
+
+	for _, path := range paths {
+		fe := allFiles[path]
+		fileDiffs = append(fileDiffs, FileDiff{
+			Path:      fe.path,
+			Status:    fe.status,
+			Additions: fe.additions,
+			Deletions: fe.deletions,
+			Patch:     fe.patch,
+		})
+
+		if fe.patch != "" {
+			patchBuf.WriteString(fe.patch)
+			if !strings.HasSuffix(fe.patch, "\n") {
+				patchBuf.WriteByte('\n')
+			}
+		}
+
+		stats.FilesChanged++
+		stats.Insertions += fe.additions
+		stats.Deletions += fe.deletions
+	}
+
+	return &BranchDiffResult{
+		RepoPath:        repoPath,
+		CurrentBranch:   currentBranch,
+		Head:            shortHash(headCommit),
+		HasLocalChanges: stats.FilesChanged > 0,
+		Stats:           stats,
+		Files:           fileDiffs,
+		Patch:           patchBuf.String(),
+	}, nil
+}
+
 // BranchDiff returns all changes since merge-base with the base branch, including worktree changes.
 func BranchDiff(dir string, opts BranchDiffOptions) (*BranchDiffResult, error) {
 	repoPath, err := gitOutput(dir, "rev-parse", "--show-toplevel")

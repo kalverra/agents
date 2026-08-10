@@ -273,3 +273,26 @@ func TestBranchDiffGlobalIgnore(t *testing.T) {
 	assert.Empty(t, result.Patch)
 	assert.Equal(t, 0, result.Stats.FilesChanged)
 }
+
+func TestStagedDiff(t *testing.T) {
+	t.Parallel()
+
+	dir := initTestRepo(t)
+	addAndCommit(t, dir, "README.md", "base\n", "init")
+
+	// Staged file
+	writeFile(t, dir, "staged.txt", "staged line\n")
+	runGitCmd(t, dir, "add", "staged.txt")
+
+	// Unstaged file (should NOT be included in StagedDiff)
+	writeFile(t, dir, "unstaged.txt", "unstaged line\n")
+
+	res, err := StagedDiff(dir, BranchDiffOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	assert.Contains(t, res.Patch, "staged.txt")
+	assert.Contains(t, res.Patch, "+staged line")
+	assert.NotContains(t, res.Patch, "unstaged.txt")
+	assert.Equal(t, 1, res.Stats.FilesChanged)
+}

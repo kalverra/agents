@@ -1,8 +1,12 @@
 package skills
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,9 +14,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kalverra/agents/internal/activity"
+	review "github.com/kalverra/agents/internal/activity/review"
+	schedule "github.com/kalverra/agents/internal/activity/schedule"
 	"github.com/kalverra/agents/internal/config"
-	"github.com/kalverra/agents/internal/git"
-	github "github.com/kalverra/agents/internal/github"
+	"github.com/kalverra/agents/internal/llm"
 	"github.com/kalverra/agents/internal/output"
 	"github.com/kalverra/agents/internal/ticket"
 )
@@ -29,174 +34,20 @@ var activityFetchCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		timeframe, _ := cmd.Flags().GetString("since")
 		projectName, _ := cmd.Flags().GetString("project")
+		ctx := cmd.Context()
+		logger := zerolog.Ctx(ctx)
 
-		now := time.Now()
-		since, err := activity.ParseTimeframe(timeframe, now)
+		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		fetcher := activity.NewFetcher(cfg, *logger)
+		report, err := fetcher.Fetch(ctx, time.Now(), timeframe, projectName)
 		if err != nil {
 			return err
 		}
 
-		ctx := cmd.Context()
-		logger := zerolog.Ctx(ctx)
-
-		cfg, loadErr := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
-		if loadErr != nil {
-			return fmt.Errorf("loading config: %w", loadErr)
-		}
-
-		report := &activity.Report{
-			Timeframe: timeframe,
-			Since:     since,
-			Until:     now,
-			Project:   projectName,
-		}
-
-		// Detect active working directory ticket context
-		repo, repoErr := git.DetectRepo(".")
-		if repoErr == nil && repo != nil {
-			if key := ticket.ExtractJiraKey(repo.Branch); key != "" {
-				report.CurrentTicket = &activity.CurrentTicketInfo{
-					ID:     key,
-					Source: "jira",
-				}
-			} else if taskRef, rErr := ticket.ParseTaskRef(repo.Branch); rErr == nil && taskRef != "" {
-				report.CurrentTicket = &activity.CurrentTicketInfo{
-					ID:     taskRef,
-					Source: "todoist",
-				}
-			}
-		}
-
-		// Fetch Todoist activity for selected project
-		if cfg.TodoistAPIToken != "" {
-			td := ticket.NewTodoist(*logger, ticket.TodoistConfig{
-				Token:   cfg.TodoistAPIToken,
-				BaseURL: cfg.TodoistRESTBase,
-			})
-
-			projectID, pErr := td.GetProjectIDByName(ctx, projectName)
-			if pErr == nil && projectID != "" {
-				completedTasks, cErr := td.FetchCompletedTasks(ctx, projectID)
-				if cErr == nil {
-					for _, ct := range completedTasks {
-						key, isLinked := activity.ParseJiraInfo(ct.Content, ct.Description, ct.Labels)
-						if !isLinked {
-							continue
-						}
-
-						taskObj := activity.TodoistTask{
-
-							ID:           ct.ID,
-							Title:        ct.Content,
-							Description:  ct.Description,
-							CompletedAt:  ct.CompletedAt,
-							URL:          ct.URL,
-							Labels:       ct.Labels,
-							JiraKey:      key,
-							IsJiraLinked: isLinked,
-						}
-
-						// Fetch task comments
-						if fetched, fErr := td.Fetch(ctx, ct.ID); fErr == nil && fetched != nil {
-							for _, c := range fetched.Comments {
-								taskObj.Comments = append(taskObj.Comments, activity.TaskComment{
-									ID:       c.ID,
-									PostedAt: c.PostedAt,
-									Content:  c.Content,
-								})
-							}
-						}
-
-						report.Todoist = append(report.Todoist, taskObj)
-					}
-				}
-			}
-		}
-
-		// Fetch Jira Cloud activity if configured
-		if j, jErr := loadJira(cmd); jErr == nil {
-			assigned, aErr := j.ListAssignedTickets(ctx)
-			if aErr == nil {
-				for _, t := range assigned {
-					// Filter out stale open/descheduled tickets updated before 'since' window
-					statusLower := strings.ToLower(strings.TrimSpace(t.Status))
-					isStaleOpen := strings.Contains(statusLower, "open") || strings.Contains(statusLower, "to do") ||
-						strings.Contains(statusLower, "descheduled")
-					if isStaleOpen && t.UpdatedAt != "" {
-						if parsed, ok := activity.ParseTimestamp(t.UpdatedAt); ok && parsed.Before(since) {
-							continue
-						}
-					}
-
-					report.JiraIssues = append(report.JiraIssues, activity.JiraIssueInfo{
-						Key:       t.ID,
-						Summary:   t.Title,
-						Status:    t.Status,
-						EpicKey:   t.ParentID,
-						EpicTitle: t.ParentTitle,
-						Sprint:    t.Sprint,
-						URL:       t.URL,
-						UpdatedAt: t.UpdatedAt,
-					})
-
-				}
-			}
-		}
-
-		// Fetch GitHub activity via gh CLI
-		ghAct, ghErr := github.FetchUserActivityWithCLI(ctx, since)
-		if ghErr == nil && ghAct != nil {
-			for _, pr := range ghAct.PRsOpened {
-				jKey, tID := activity.ExtractKeyAndTaskID(pr.Title)
-				prInfo := activity.PullRequestInfo{
-					Number:     pr.Number,
-					Title:      pr.Title,
-					Body:       pr.Body,
-					URL:        pr.URL,
-					State:      pr.State,
-					Repository: pr.Repository,
-					JiraKey:    jKey,
-					TaskID:     tID,
-				}
-				if commits, cErr := github.FetchPRCommitsWithCLI(ctx, pr.Repository, pr.Number); cErr == nil {
-					for _, cm := range commits {
-						cjKey, ctID := activity.ExtractKeyAndTaskID(cm.Message)
-						prInfo.Commits = append(prInfo.Commits, activity.CommitInfo{
-							SHA:     cm.SHA,
-							Date:    cm.Date,
-							Message: cm.Message,
-							JiraKey: cjKey,
-							TaskID:  ctID,
-						})
-					}
-				}
-				report.GitHub.PRsOpened = append(report.GitHub.PRsOpened, prInfo)
-			}
-			for _, pr := range ghAct.PRsMerged {
-				jKey, tID := activity.ExtractKeyAndTaskID(pr.Title)
-				report.GitHub.PRsMerged = append(report.GitHub.PRsMerged, activity.PullRequestInfo{
-					Number:     pr.Number,
-					Title:      pr.Title,
-					Body:       pr.Body,
-					URL:        pr.URL,
-					State:      pr.State,
-					Repository: pr.Repository,
-					JiraKey:    jKey,
-					TaskID:     tID,
-				})
-			}
-			for _, rev := range ghAct.PRReviews {
-				report.GitHub.PRReviews = append(report.GitHub.PRReviews, activity.ReviewInfo{
-					PRNumber:   rev.Number,
-					PRTitle:    rev.Title,
-					State:      rev.State,
-					Repository: rev.Repository,
-					URL:        rev.URL,
-				})
-			}
-		}
-
-		// Write XML report file for AI context
 		xmlContent := activity.FormatXMLReport(report)
 		_ = os.WriteFile("activity.xml", []byte(xmlContent), 0600)
 
@@ -208,8 +59,8 @@ var activityFetchCmd = &cobra.Command{
 		fmt.Printf(
 			"Fetched activity for timeframe %s (%s to %s):\n",
 			timeframe,
-			since.Format("2006-01-02"),
-			now.Format("2006-01-02"),
+			report.Since.Format("2006-01-02"),
+			report.Until.Format("2006-01-02"),
 		)
 		fmt.Printf("- Todoist %s project completed tasks: %d\n", projectName, len(report.Todoist))
 		fmt.Printf("- Jira issues active/assigned: %d\n", len(report.JiraIssues))
@@ -218,16 +69,319 @@ var activityFetchCmd = &cobra.Command{
 			len(report.GitHub.PRsOpened)+len(report.GitHub.PRsMerged)+len(report.GitHub.PRReviews),
 		)
 		fmt.Println("\nSaved activity context to activity.xml")
+		return nil
+	},
+}
 
+var activityReviewCmd = &cobra.Command{
+	Use:   "review",
+	Short: "Generate a standup/summary report using an AI agent",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		mode, _ := cmd.Flags().GetString("mode")
+		timeframe, _ := cmd.Flags().GetString("since")
+		projectName, _ := cmd.Flags().GetString("project")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		provider, _ := cmd.Flags().GetString("provider")
+		model, _ := cmd.Flags().GetString("model")
+
+		ctx := cmd.Context()
+		logger := zerolog.Ctx(ctx)
+
+		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("home dir: %w", err)
+		}
+		reportsDir := cfg.ActivityReportsDir
+		if reportsDir == "" {
+			reportsDir = filepath.Join(home, ".agents", "reports", "activity")
+		}
+		promptsDir := cfg.ActivityPromptsDir
+		if promptsDir == "" {
+			promptsDir = filepath.Join(home, ".agents", "prompts", "activity")
+		}
+
+		fetcher := activity.NewFetcher(cfg, *logger)
+
+		llmCfg := llmConfigFrom(cfg, provider, model)
+		llmRunner := llm.NewRunner(llmCfg)
+
+		var poster review.Poster
+		var projectID string
+		if !dryRun && cfg.TodoistAPIToken != "" {
+			td := ticket.NewTodoist(*logger, ticket.TodoistConfig{
+				Token:   cfg.TodoistAPIToken,
+				BaseURL: cfg.TodoistRESTBase,
+			})
+			projectID, _ = td.GetProjectIDByName(ctx, projectName)
+			poster = td
+		}
+
+		evalMode, _ := cmd.Flags().GetBool("eval")
+
+		runner := &review.Runner{
+			Fetcher:    fetcher,
+			LLM:        llmRunner,
+			Poster:     poster,
+			ReportsDir: reportsDir,
+			PromptsDir: promptsDir,
+			ProjectID:  projectID,
+			Logger:     *logger,
+			EvalMode:   evalMode,
+			Provider:   llmCfg.Provider,
+			Model:      llmCfg.Model,
+		}
+
+		res, err := runner.Run(ctx, mode, timeframe, projectName, dryRun)
+		if err != nil {
+			return err
+		}
+
+		if output.JSON() {
+			output.Write("activity-review", map[string]any{
+				"mode":        res.Mode,
+				"timeframe":   res.Timeframe,
+				"project":     res.ProjectName,
+				"report_path": res.ReportPath,
+				"task_id":     res.TaskID,
+				"task_url":    res.TaskURL,
+				"generated":   res.Generated,
+			}, nil)
+			return nil
+		}
+
+		fmt.Printf("Generated %s report for %s (%s)\n", mode, projectName, res.Timeframe)
+		fmt.Printf("Saved to: %s\n", res.ReportPath)
+		if res.TaskID != "" {
+			fmt.Printf("Created Todoist task: %s\n", res.TaskURL)
+		}
+		return nil
+	},
+}
+
+func llmConfigFrom(cfg *config.Config, providerOverride, modelOverride string) llm.Config {
+	var c llm.Config
+	if strings.EqualFold(cfg.ActivityLLMProvider, llm.ProviderLlama) ||
+		strings.EqualFold(providerOverride, llm.ProviderLlama) {
+		c = llm.DefaultLlamaConfig()
+		if cfg.ActivityLlamaCmd != "" {
+			c.Cmd = cfg.ActivityLlamaCmd
+		}
+		if cfg.ActivityLlamaArgs != "" {
+			c.Args = strings.Fields(cfg.ActivityLlamaArgs)
+		}
+	} else {
+		c = llm.DefaultConfig()
+		if cfg.ActivityAgentCmd != "" {
+			c.Cmd = cfg.ActivityAgentCmd
+		}
+		if cfg.ActivityAgentArgs != "" {
+			c.Args = strings.Fields(cfg.ActivityAgentArgs)
+		}
+	}
+
+	if cfg.ActivityOllamaHost != "" {
+		c.OllamaHost = cfg.ActivityOllamaHost
+	}
+	if cfg.ActivityWindowsMAC != "" {
+		c.WindowsMAC = cfg.ActivityWindowsMAC
+	}
+
+	switch {
+	case providerOverride != "":
+		c.Provider = providerOverride
+	case cfg.ActivityLLMProvider != "":
+		c.Provider = cfg.ActivityLLMProvider
+	default:
+		c.Provider = llm.ProviderAuto
+	}
+
+	if cfg.ActivityModel != "" {
+		c.Model = cfg.ActivityModel
+	}
+	if modelOverride != "" {
+		c.Model = modelOverride
+	}
+	return c
+}
+
+func newScheduler(cmd *cobra.Command, cfg *config.Config, projectName string) (*schedule.Scheduler, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("home dir: %w", err)
+	}
+	binaryPath, err := os.Executable()
+	if err != nil {
+		binaryPath = filepath.Join(home, ".agents", "agents")
+	}
+	provider, _ := cmd.Flags().GetString("provider")
+	model, _ := cmd.Flags().GetString("model")
+	return &schedule.Scheduler{
+		PlistDir:    filepath.Join(home, "Library", "LaunchAgents"),
+		LogDir:      filepath.Join(home, "Library", "Logs", "agents"),
+		BinaryPath:  binaryPath,
+		LabelPrefix: "com.kalverra.agents.activity",
+		Project:     projectName,
+		Provider:    provider,
+		Model:       model,
+		UID:         strconv.Itoa(os.Getuid()),
+		Logger:      *zerolog.Ctx(cmd.Context()),
+		Schedule: schedule.Schedule{
+			Daily:     nonEmpty(cfg.ActivityScheduleDaily, "weekday:09:30"),
+			Weekly:    nonEmpty(cfg.ActivityScheduleWeekly, "fri:15:30"),
+			Monthly:   nonEmpty(cfg.ActivityScheduleMonthly, "28:16:30"),
+			Quarterly: nonEmpty(cfg.ActivityScheduleQuarterly, "28:16:30"),
+		},
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).CombinedOutput() //nolint:gosec
+		},
+	}, nil
+}
+
+func nonEmpty(s, def string) string {
+	if strings.TrimSpace(s) != "" {
+		return s
+	}
+	return def
+}
+
+var activityScheduleCmd = &cobra.Command{
+	Use:   "schedule",
+	Short: "Install or manage launchd jobs for automatic activity reports",
+}
+
+var activityScheduleInstallCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install launchd plists for daily/weekly/monthly/quarterly reports",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		projectName, _ := cmd.Flags().GetString("project")
+		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		s, err := newScheduler(cmd, cfg, projectName)
+		if err != nil {
+			return err
+		}
+		if err := s.Install(cmd.Context()); err != nil {
+			return err
+		}
+		if output.JSON() {
+			output.Write("activity-schedule-install", map[string]string{"status": "installed"}, nil)
+			return nil
+		}
+		fmt.Println("Installed activity report schedules.")
+		return nil
+	},
+}
+
+var activityScheduleUninstallCmd = &cobra.Command{
+	Use:   "uninstall",
+	Short: "Unload and remove launchd plists for activity reports",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		projectName, _ := cmd.Flags().GetString("project")
+		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		s, err := newScheduler(cmd, cfg, projectName)
+		if err != nil {
+			return err
+		}
+		if err := s.Uninstall(cmd.Context()); err != nil {
+			return err
+		}
+		if output.JSON() {
+			output.Write("activity-schedule-uninstall", map[string]string{"status": "uninstalled"}, nil)
+			return nil
+		}
+		fmt.Println("Uninstalled activity report schedules.")
+		return nil
+	},
+}
+
+var activityScheduleStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Check whether activity report launchd jobs are loaded",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		projectName, _ := cmd.Flags().GetString("project")
+		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		s, err := newScheduler(cmd, cfg, projectName)
+		if err != nil {
+			return err
+		}
+		status, err := s.Status(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if output.JSON() {
+			output.Write("activity-schedule-status", map[string]bool{
+				"daily":     status.Daily,
+				"weekly":    status.Weekly,
+				"monthly":   status.Monthly,
+				"quarterly": status.Quarterly,
+			}, nil)
+			return nil
+		}
+		fmt.Printf("Daily:     %t\n", status.Daily)
+		fmt.Printf("Weekly:    %t\n", status.Weekly)
+		fmt.Printf("Monthly:   %t\n", status.Monthly)
+		fmt.Printf("Quarterly: %t\n", status.Quarterly)
+		return nil
+	},
+}
+
+var activityModelsCmd = &cobra.Command{
+	Use:   "models",
+	Short: "List available models for each LLM provider",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		models := llm.KnownModels()
+		if output.JSON() {
+			output.Write("activity-models", models, nil)
+			return nil
+		}
+		fmt.Println("agy models:")
+		for _, m := range models[llm.ProviderAgy] {
+			fmt.Printf("  - %s\n", m)
+		}
+		fmt.Println("\nollama models:")
+		for _, m := range models[llm.ProviderOllama] {
+			fmt.Printf("  - %s\n", m)
+		}
+		fmt.Println("\nllama models (GGUF identifiers):")
+		for _, m := range models[llm.ProviderLlama] {
+			fmt.Printf("  - %s\n", m)
+		}
 		return nil
 	},
 }
 
 func init() {
 	activityFetchCmd.Flags().
-		String("since", "7d", "Timeframe window (e.g. 1d, 7d, 30d, today, yesterday, week, month, 24h)")
+		String("since", "7d", "Timeframe window (e.g. 1d, 7d, 30d, today, yesterday, week, month, quarter, 24h)")
 	activityFetchCmd.Flags().String("project", "Work", "Todoist project name filter")
 
-	ActivityCmd.AddCommand(activityFetchCmd)
-	Cmd.AddCommand(ActivityCmd)
+	activityReviewCmd.Flags().String("mode", "", "Review mode: daily, weekly, monthly, quarterly")
+	_ = activityReviewCmd.MarkFlagRequired("mode")
+	activityReviewCmd.Flags().String("since", "", "Timeframe override (defaults per mode)")
+	activityReviewCmd.Flags().String("project", "Work", "Todoist project name filter")
+	activityReviewCmd.Flags().Bool("dry-run", false, "Generate report but do not create Todoist task")
+	activityReviewCmd.Flags().
+		String("provider", "", "LLM provider: agy, llama, ollama, auto (overrides ACTIVITY_LLM_PROVIDER)")
+	activityReviewCmd.Flags().String("model", "", "Model identifier or GGUF path (overrides ACTIVITY_MODEL)")
+	activityReviewCmd.Flags().Bool("eval", false, "Prompt for interactive rating and record live evaluation feedback")
+
+	activityScheduleCmd.Flags().String("project", "Work", "Todoist project name for reports")
+	activityScheduleCmd.Flags().String("provider", "", "LLM provider for scheduled jobs: agy, llama, ollama, auto")
+	activityScheduleCmd.Flags().String("model", "", "Model identifier or GGUF path for scheduled jobs")
+	activityScheduleCmd.AddCommand(activityScheduleInstallCmd, activityScheduleUninstallCmd, activityScheduleStatusCmd)
+
+	ActivityCmd.AddCommand(activityFetchCmd, activityReviewCmd, activityScheduleCmd, activityModelsCmd)
 }

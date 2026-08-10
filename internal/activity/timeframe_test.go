@@ -28,6 +28,7 @@ func TestParseTimeframe(t *testing.T) {
 		{input: "yesterday", expected: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), wantErr: false},
 		{input: "week", expected: now.Add(-7 * 24 * time.Hour), wantErr: false},
 		{input: "month", expected: now.Add(-30 * 24 * time.Hour), wantErr: false},
+		{input: "quarter", expected: now.Add(-90 * 24 * time.Hour), wantErr: false},
 		{input: "invalid", wantErr: true},
 	}
 

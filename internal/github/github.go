@@ -195,12 +195,14 @@ func FetchPR(ctx context.Context, client *githubv4.Client, owner, repo, branch s
 
 // PullRequestSummary represents a PR summary from GitHub search.
 type PullRequestSummary struct {
-	Number     int    `json:"number"`
-	Title      string `json:"title"`
-	Body       string `json:"body,omitempty"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
-	Repository string `json:"repository"`
+	Number     int       `json:"number"`
+	Title      string    `json:"title"`
+	Body       string    `json:"body,omitempty"`
+	URL        string    `json:"url"`
+	State      string    `json:"state"`
+	Repository string    `json:"repository"`
+	CreatedAt  time.Time `json:"created_at,omitzero"`
+	MergedAt   time.Time `json:"merged_at,omitzero"`
 }
 
 // UserActivity contains GitHub activity for a user within a timeframe.
@@ -211,11 +213,13 @@ type UserActivity struct {
 }
 
 type ghSearchPRItem struct {
-	Number     int    `json:"number"`
-	Title      string `json:"title"`
-	Body       string `json:"body"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
+	Number     int       `json:"number"`
+	Title      string    `json:"title"`
+	Body       string    `json:"body"`
+	URL        string    `json:"url"`
+	State      string    `json:"state"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ClosedAt   time.Time `json:"closedAt"`
 	Repository struct {
 		Name          string `json:"name"`
 		NameWithOwner string `json:"nameWithOwner"`
@@ -228,7 +232,7 @@ func FetchUserActivityWithCLI(ctx context.Context, since time.Time) (*UserActivi
 
 	// Search PRs authored by user updated since target date
 	//nolint:gosec
-	outAuthored, err := exec.CommandContext(ctx, "gh", "search", "prs", "--author", "@me", "--updated", ">="+sinceStr, "--json", "number,title,body,url,state,repository").
+	outAuthored, err := exec.CommandContext(ctx, "gh", "search", "prs", "--author", "@me", "--updated", ">="+sinceStr, "--json", "number,title,body,url,state,repository,createdAt,closedAt").
 		Output()
 
 	if err != nil {
@@ -253,8 +257,10 @@ func FetchUserActivityWithCLI(ctx context.Context, since time.Time) (*UserActivi
 			URL:        item.URL,
 			State:      item.State,
 			Repository: repo,
+			CreatedAt:  item.CreatedAt,
 		}
 		if strings.EqualFold(item.State, "MERGED") {
+			summary.MergedAt = item.ClosedAt
 			act.PRsMerged = append(act.PRsMerged, summary)
 		} else {
 			act.PRsOpened = append(act.PRsOpened, summary)
@@ -263,7 +269,7 @@ func FetchUserActivityWithCLI(ctx context.Context, since time.Time) (*UserActivi
 
 	// Search PRs reviewed / commented by user
 	//nolint:gosec
-	outReviewed, err := exec.CommandContext(ctx, "gh", "search", "prs", "--commenter", "@me", "--updated", ">="+sinceStr, "--json", "number,title,body,url,state,repository").
+	outReviewed, err := exec.CommandContext(ctx, "gh", "search", "prs", "--commenter", "@me", "--updated", ">="+sinceStr, "--json", "number,title,body,url,state,repository,createdAt,closedAt").
 		Output()
 
 	if err == nil {
@@ -281,6 +287,7 @@ func FetchUserActivityWithCLI(ctx context.Context, since time.Time) (*UserActivi
 					URL:        item.URL,
 					State:      item.State,
 					Repository: repo,
+					CreatedAt:  item.CreatedAt,
 				})
 			}
 		}

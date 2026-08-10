@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// ParseTimeframe converts a timeframe string like "1d", "7d", "30d", "today", "yesterday", "week", "month", or "24h" into a start time relative to now.
+// ParseTimeframe converts a timeframe string like "1d", "7d", "30d", "today", "yesterday", "week", "month", "quarter", or "24h" into a start time relative to now.
 func ParseTimeframe(tf string, now time.Time) (time.Time, error) {
 	tf = strings.ToLower(strings.TrimSpace(tf))
 	if tf == "" {
@@ -24,6 +24,8 @@ func ParseTimeframe(tf string, now time.Time) (time.Time, error) {
 		return now.Add(-7 * 24 * time.Hour), nil
 	case "month":
 		return now.Add(-30 * 24 * time.Hour), nil
+	case "quarter":
+		return now.Add(-90 * 24 * time.Hour), nil
 	}
 
 	if before, ok := strings.CutSuffix(tf, "d"); ok {
@@ -40,7 +42,7 @@ func ParseTimeframe(tf string, now time.Time) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf(
-		"unsupported timeframe format: %q (use 1d, 7d, 30d, today, yesterday, week, month, or duration like 24h)",
+		"unsupported timeframe format: %q (use 1d, 7d, 30d, today, yesterday, week, month, quarter, or duration like 24h)",
 		tf,
 	)
 }

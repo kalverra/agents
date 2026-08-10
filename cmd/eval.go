@@ -34,6 +34,10 @@ var evalCmd = &cobra.Command{
 		spendCap, _ := cmd.Flags().GetFloat64("spend-cap")
 		spendCheck, _ := cmd.Flags().GetBool("spend-check")
 		compact, _ := cmd.Flags().GetBool("compact")
+		useLive, _ := cmd.Flags().GetBool("live")
+		if useLive && !cmd.Flags().Changed("cases") {
+			casesDir = filepath.Join("eval", "live_feedback")
+		}
 
 		if repo == "" {
 			repo = repoRoot()
@@ -280,6 +284,7 @@ func init() {
 	evalCmd.Flags().Float64("spend-cap", 0, "Maximum cumulative spend in USD (0 = unlimited)")
 	evalCmd.Flags().Bool("spend-check", false, "Only check spend cap, don't run eval")
 	evalCmd.Flags().Bool("compact", false, "In AI mode, strip verbose iteration data for fewer tokens")
+	evalCmd.Flags().Bool("live", false, "Run evaluation on captured live feedback records in eval/live_feedback")
 	rootCmd.AddCommand(evalCmd)
 }
 

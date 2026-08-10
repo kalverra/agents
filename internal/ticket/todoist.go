@@ -272,6 +272,8 @@ func (t *Todoist) Comment(ctx context.Context, id string, body string) error {
 type CreateTaskRequest struct {
 	Title       string `json:"content"`
 	Description string `json:"description"`
+	ProjectID   string `json:"project_id,omitempty"`
+	DueString   string `json:"due_string,omitempty"`
 }
 
 // CreateTask creates a task in Todoist.
@@ -288,6 +290,12 @@ func (t *Todoist) CreateTask(ctx context.Context, req CreateTaskRequest) (*Ticke
 	}
 	if strings.TrimSpace(req.Description) != "" {
 		payload["description"] = req.Description
+	}
+	if strings.TrimSpace(req.ProjectID) != "" {
+		payload["project_id"] = req.ProjectID
+	}
+	if strings.TrimSpace(req.DueString) != "" {
+		payload["due_string"] = req.DueString
 	}
 
 	resp, err := t.client.R().
