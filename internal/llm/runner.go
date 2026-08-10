@@ -55,6 +55,10 @@ type Config struct {
 
 	// OllamaKeepAlive is how long to keep the model loaded in VRAM (default "2h").
 	OllamaKeepAlive string
+	// OllamaLoadTimeout is max duration to wait for loading model into VRAM (default 5m).
+	OllamaLoadTimeout time.Duration
+	// OllamaGenTimeout is max duration to wait for response generation after model load (default 3m).
+	OllamaGenTimeout time.Duration
 
 	// PromptFn prompts the user interactively (returns true if user approves local fallback).
 	PromptFn func(msg string) (bool, error)
@@ -79,6 +83,12 @@ func NewRunner(cfg Config) *Runner {
 	}
 	if cfg.OllamaKeepAlive == "" {
 		cfg.OllamaKeepAlive = "2h"
+	}
+	if cfg.OllamaLoadTimeout == 0 {
+		cfg.OllamaLoadTimeout = 5 * time.Minute
+	}
+	if cfg.OllamaGenTimeout == 0 {
+		cfg.OllamaGenTimeout = 3 * time.Minute
 	}
 	return &Runner{cfg: cfg}
 }
@@ -366,6 +376,9 @@ func (r *Runner) runOllamaWithWoL(ctx context.Context, prompt string, prog *Prog
 
 	s3 := prog.AddStep(fmt.Sprintf("Load %s into VRAM", r.cfg.Model))
 
+	loadCtx, loadCancel := context.WithTimeout(ctx, r.cfg.OllamaLoadTimeout)
+	defer loadCancel()
+
 	client := r.httpClient(0)
 	url := fmt.Sprintf("http://%s/api/generate", r.cfg.OllamaHost)
 
@@ -381,7 +394,7 @@ func (r *Runner) runOllamaWithWoL(ctx context.Context, prompt string, prog *Prog
 		return "", fmt.Errorf("marshaling Ollama request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBytes))
+	req, err := http.NewRequestWithContext(loadCtx, http.MethodPost, url, bytes.NewReader(jsonBytes))
 	if err != nil {
 		s3.Fail(err)
 		return "", fmt.Errorf("creating Ollama request: %w", err)
@@ -402,7 +415,7 @@ func (r *Runner) runOllamaWithWoL(ctx context.Context, prompt string, prog *Prog
 		return "", err
 	}
 
-	return decodeOllamaStream(resp.Body, prog, s3)
+	return decodeOllamaStream(ctx, resp.Body, prog, s3, r.cfg.OllamaLoadTimeout, r.cfg.OllamaGenTimeout)
 }
 
 type ollamaStreamChunk struct {
@@ -414,8 +427,32 @@ type ollamaStreamChunk struct {
 	EvalCount    int    `json:"eval_count,omitempty"`
 }
 
-func decodeOllamaStream(r io.Reader, prog *Progress, loadStep *Step) (string, error) {
-	decoder := json.NewDecoder(r)
+type chunkResult struct {
+	chunk ollamaStreamChunk
+	err   error
+}
+
+func decodeOllamaStream(
+	ctx context.Context,
+	r io.Reader,
+	prog *Progress,
+	loadStep *Step,
+	loadTimeout, genTimeout time.Duration,
+) (string, error) {
+	chunkChan := make(chan chunkResult)
+
+	go func() {
+		defer close(chunkChan)
+		decoder := json.NewDecoder(r)
+		for decoder.More() {
+			var chunk ollamaStreamChunk
+			err := decoder.Decode(&chunk)
+			chunkChan <- chunkResult{chunk: chunk, err: err}
+			if err != nil || chunk.Done {
+				break
+			}
+		}
+	}()
 
 	var (
 		fullText   strings.Builder
@@ -424,60 +461,113 @@ func decodeOllamaStream(r io.Reader, prog *Progress, loadStep *Step) (string, er
 		finalChunk ollamaStreamChunk
 	)
 
-	for decoder.More() {
-		var chunk ollamaStreamChunk
-		if err := decoder.Decode(&chunk); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if !firstToken {
-				loadStep.Fail(err)
-			} else if genStep != nil {
-				genStep.Fail(err)
-			}
-			return "", fmt.Errorf("reading Ollama stream: %w", err)
+	loadTimer := time.NewTimer(loadTimeout)
+	defer loadTimer.Stop()
+
+	var genTimer *time.Timer
+
+	for {
+		var activeTimer <-chan time.Time
+		if !firstToken {
+			activeTimer = loadTimer.C
+		} else if genTimer != nil {
+			activeTimer = genTimer.C
 		}
 
-		if chunk.Error != "" {
-			err := fmt.Errorf("ollama error: %s", chunk.Error)
+		select {
+		case <-ctx.Done():
+			err := ctx.Err()
 			if !firstToken {
 				loadStep.Fail(err)
 			} else if genStep != nil {
 				genStep.Fail(err)
 			}
 			return "", err
-		}
 
-		if !firstToken && (chunk.Response != "" || chunk.Done || chunk.LoadDuration > 0) {
-			firstToken = true
-			if chunk.LoadDuration > 0 {
-				loadDur := time.Duration(chunk.LoadDuration).Round(time.Second)
-				loadStep.Complete(fmt.Sprintf("Loaded in %v", loadDur))
-			} else {
-				loadStep.Complete("Model ready")
+		case <-activeTimer:
+			err := fmt.Errorf("context deadline exceeded")
+			if !firstToken {
+				loadStep.Fail(fmt.Errorf("loading into VRAM timed out after %v: %w", loadTimeout, err))
+			} else if genStep != nil {
+				genStep.Fail(fmt.Errorf("generation timed out after %v: %w", genTimeout, err))
 			}
-			genStep = prog.AddStep("Generate Response")
-		}
+			return "", err
 
-		if chunk.Response != "" {
-			fullText.WriteString(chunk.Response)
-		}
+		case res, ok := <-chunkChan:
+			if !ok || errors.Is(res.err, io.EOF) {
+				completeGenStep(genStep, fullText.Len(), finalChunk)
+				return strings.TrimSpace(fullText.String()), nil
+			}
 
-		if chunk.Done {
-			finalChunk = chunk
-			break
+			if res.err != nil {
+				failStep(loadStep, genStep, firstToken, res.err)
+				return "", fmt.Errorf("reading Ollama stream: %w", res.err)
+			}
+
+			chunk := res.chunk
+			if chunk.Error != "" {
+				err := fmt.Errorf("ollama error: %s", chunk.Error)
+				failStep(loadStep, genStep, firstToken, err)
+				return "", err
+			}
+
+			if !firstToken && (chunk.Response != "" || chunk.Done || chunk.LoadDuration > 0) {
+				firstToken = true
+				stopTimer(loadTimer)
+				completeLoadStep(loadStep, chunk.LoadDuration)
+				genStep = prog.AddStep("Generate Response")
+				genTimer = time.NewTimer(genTimeout)
+				defer genTimer.Stop()
+			}
+
+			if chunk.Response != "" {
+				fullText.WriteString(chunk.Response)
+			}
+
+			if chunk.Done {
+				finalChunk = chunk
+				completeGenStep(genStep, fullText.Len(), finalChunk)
+				return strings.TrimSpace(fullText.String()), nil
+			}
 		}
 	}
+}
 
-	if genStep != nil {
-		detail := fmt.Sprintf("%d bytes", fullText.Len())
-		if finalChunk.EvalCount > 0 {
-			detail = fmt.Sprintf("%d bytes, %d tokens", fullText.Len(), finalChunk.EvalCount)
-		}
-		genStep.Complete(detail)
+func failStep(loadStep, genStep *Step, firstToken bool, err error) {
+	if !firstToken {
+		loadStep.Fail(err)
+	} else if genStep != nil {
+		genStep.Fail(err)
 	}
+}
 
-	return strings.TrimSpace(fullText.String()), nil
+func stopTimer(t *time.Timer) {
+	if t != nil && t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+}
+
+func completeLoadStep(loadStep *Step, loadDuration int64) {
+	if loadDuration > 0 {
+		loadDur := time.Duration(loadDuration).Round(time.Second)
+		loadStep.Complete(fmt.Sprintf("Loaded in %v", loadDur))
+	} else {
+		loadStep.Complete("Model ready")
+	}
+}
+
+func completeGenStep(genStep *Step, textLen int, finalChunk ollamaStreamChunk) {
+	if genStep == nil {
+		return
+	}
+	detail := fmt.Sprintf("%d bytes", textLen)
+	if finalChunk.EvalCount > 0 {
+		detail = fmt.Sprintf("%d bytes, %d tokens", textLen, finalChunk.EvalCount)
+	}
+	genStep.Complete(detail)
 }
 
 func (r *Runner) runAgy(ctx context.Context, prompt string, prog *Progress) (string, error) {

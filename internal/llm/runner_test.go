@@ -300,6 +300,72 @@ func TestRunner_Ollama_Streaming_ProgressSteps(t *testing.T) {
 	assert.Contains(t, progressOutput, "Generate Response (11 bytes, 2 tokens)")
 }
 
+func TestRunner_Ollama_LoadTimeout(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/generate" {
+			time.Sleep(200 * time.Millisecond) // exceeds LoadTimeout of 50ms
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = w.Write([]byte(`{"response":"too late"}` + "\n"))
+			return
+		}
+	}))
+	defer ts.Close()
+
+	r := llm.NewRunner(llm.Config{
+		Provider:          llm.ProviderOllama,
+		Model:             "gemma4",
+		OllamaHost:        strings.TrimPrefix(ts.URL, "http://"),
+		OllamaLoadTimeout: 50 * time.Millisecond,
+		OllamaGenTimeout:  1 * time.Second,
+		HTTPClient:        ts.Client(),
+	})
+
+	_, err := r.Run(context.Background(), "test", "load timeout test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context deadline exceeded")
+}
+
+func TestRunner_Ollama_GenTimeout(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/generate" {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.(http.Flusher).Flush()
+			// Chunk 1: load done immediately
+			_, _ = w.Write([]byte(`{"model":"gemma4","response":"first ","done":false}` + "\n"))
+			w.(http.Flusher).Flush()
+			// Delay before second chunk past GenTimeout of 50ms
+			time.Sleep(200 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"model":"gemma4","response":"second","done":true}` + "\n"))
+			return
+		}
+	}))
+	defer ts.Close()
+
+	r := llm.NewRunner(llm.Config{
+		Provider:          llm.ProviderOllama,
+		Model:             "gemma4",
+		OllamaHost:        strings.TrimPrefix(ts.URL, "http://"),
+		OllamaLoadTimeout: 1 * time.Second,
+		OllamaGenTimeout:  50 * time.Millisecond,
+		HTTPClient:        ts.Client(),
+	})
+
+	_, err := r.Run(context.Background(), "test", "gen timeout test")
+	require.Error(t, err)
+}
+
 func ext() string {
 	if runtime.GOOS == "windows" {
 		return ".bat"
