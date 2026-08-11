@@ -434,7 +434,7 @@ func (r *Runner) runOllamaWithWoL(ctx context.Context, prompt string, prog *Prog
 		"stream":     true,
 		"keep_alive": r.cfg.OllamaKeepAlive,
 		"options": map[string]any{
-			"num_predict": 4096,
+			"num_predict": 8192,
 		},
 	}
 	jsonBytes, err := json.Marshal(reqBody)
