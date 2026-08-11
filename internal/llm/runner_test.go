@@ -531,7 +531,7 @@ func TestRunner_Ollama_Sends_NumPredict(t *testing.T) {
 			if prompt, _ := req["prompt"].(string); prompt != "" {
 				options, ok := req["options"].(map[string]any)
 				assert.True(t, ok)
-				assert.EqualValues(t, 4096, options["num_predict"])
+				assert.EqualValues(t, 8192, options["num_predict"])
 				w.Header().Set("Content-Type", "application/x-ndjson")
 				_, _ = w.Write([]byte(`{"model":"gemma4","response":"ok","done":true}` + "\n"))
 				return

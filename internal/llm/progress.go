@@ -45,7 +45,9 @@ func (s *Step) Complete(detail string) {
 	s.Detail = detail
 	s.State = StepSuccess
 	if s.owner != nil {
-		s.EndAt = s.owner.now()
+		if s.EndAt.IsZero() {
+			s.EndAt = s.owner.now()
+		}
 		s.owner.renderStep(s)
 	}
 }
@@ -58,7 +60,9 @@ func (s *Step) Fail(err error) {
 	s.Err = err
 	s.State = StepFailed
 	if s.owner != nil {
-		s.EndAt = s.owner.now()
+		if s.EndAt.IsZero() {
+			s.EndAt = s.owner.now()
+		}
 		s.owner.renderStep(s)
 	}
 }

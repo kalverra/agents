@@ -156,3 +156,30 @@ func TestProgress_TTY_CorrectHeaderCursorMovement(t *testing.T) {
 	// Step 2 has 3 lines above it (Header, │, Step 1), so it must move up 3 lines (\033[3A)
 	assert.Contains(t, out, "\033[3A")
 }
+
+func TestStep_Complete_PreservesOriginalEndAt(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	now := time.Now()
+	currentTime := now
+
+	p := llm.NewProgress(&buf, "commit message", "gemma4:31b", false)
+	p.Now = func() time.Time { return currentTime }
+
+	s := p.AddStep("Evaluate Prompt")
+	currentTime = currentTime.Add(1 * time.Second)
+	s.Complete("Prompt evaluated")
+
+	assert.Equal(t, currentTime, s.EndAt)
+
+	// Subsquent call to Complete (e.g. to update details with metrics) must not overwrite EndAt
+	currentTime = currentTime.Add(30 * time.Second)
+	s.Complete("891 prompt tokens, 1124.5 tok/s")
+
+	assert.Equal(t, now.Add(1*time.Second), s.EndAt)
+	p.Finish(31 * time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "✓ Evaluate Prompt (891 prompt tokens, 1124.5 tok/s) (1s)")
+}
