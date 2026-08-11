@@ -56,7 +56,7 @@ type Config struct {
 
 	// OllamaKeepAlive is how long to keep the model loaded in VRAM (default "2h").
 	OllamaKeepAlive string
-	// OllamaLoadTimeout is max duration to wait for loading model into VRAM (default 5m).
+	// OllamaLoadTimeout is max duration to wait for loading model into VRAM
 	OllamaLoadTimeout time.Duration
 	// OllamaGenTimeout is max duration to wait for response generation after model load (default 3m).
 	OllamaGenTimeout time.Duration

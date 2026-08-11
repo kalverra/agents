@@ -44,13 +44,17 @@ var CommitMsgCmd = &cobra.Command{
 		}
 
 		if finalizeEval {
-			evalDir, _ := cmd.Flags().GetString("eval-dir")
-			_, err := commit.FinalizeEval(commitMsgFile, evalDir)
+			evalDirFlag, _ := cmd.Flags().GetString("eval-dir")
+			evalDir, err := ResolveEvalDir(evalDirFlag)
+			if err != nil {
+				return fmt.Errorf("resolving eval dir: %w", err)
+			}
+			_, err = commit.FinalizeEval(commitMsgFile, evalDir)
 			return err
 		}
 
 		if installHook {
-			return installGitHook(cmd.Context(), globalHook, dir, evalMode)
+			return installGitHooks(cmd.Context(), globalHook, dir, evalMode)
 		}
 
 		ctx := cmd.Context()
@@ -81,12 +85,19 @@ var CommitMsgCmd = &cobra.Command{
 			Logger:        *logger,
 		}
 
+		evalDirFlag, _ := cmd.Flags().GetString("eval-dir")
+		evalDir, err := ResolveEvalDir(evalDirFlag)
+		if err != nil {
+			return fmt.Errorf("resolving eval dir: %w", err)
+		}
+
 		res, err := runner.Run(ctx, commit.Options{
 			Dir:           dir,
 			CommitMsgFile: commitMsgFile,
 			CommitSource:  commitSource,
 			CommitSHA:     commitSHA,
 			EvalMode:      evalMode,
+			EvalDir:       evalDir,
 			Provider:      llmCfg.Provider,
 			Model:         llmCfg.Model,
 		})
@@ -124,7 +135,7 @@ var CommitMsgCmd = &cobra.Command{
 	},
 }
 
-func installGitHook(ctx context.Context, global bool, dir string, evalMode bool) error {
+func installGitHooks(ctx context.Context, global bool, dir string, evalMode bool) error {
 	exe, err := os.Executable()
 	if err != nil {
 		home, hErr := os.UserHomeDir()
@@ -133,32 +144,99 @@ func installGitHook(ctx context.Context, global bool, dir string, evalMode bool)
 		}
 		exe = filepath.Join(home, ".agents", "agents")
 	}
-
 	evalFlag := ""
 	if evalMode {
 		evalFlag = " --eval"
 	}
 
-	prepHookScript := fmt.Sprintf(`#!/bin/sh
-if [ -c /dev/tty ]; then
+	type hook struct {
+		name   string
+		script string
+	}
+	// All possible git hooks
+	hooks := []hook{
+		{
+			name: "applypatch-msg",
+		},
+		{
+			name: "pre-applypatch",
+		},
+		{
+			name: "post-applypatch",
+		},
+		{
+			name: "pre-commit",
+		},
+		{
+			name: "pre-merge-commit",
+		},
+		{
+			name: "prepare-commit-msg",
+			script: fmt.Sprintf(`if [ -c /dev/tty ] && (exec < /dev/tty) 2>/dev/null; then
   exec < /dev/tty
 fi
 %q commit-msg "$1" "$2" "$3"%s
 status=$?
 if [ $status -ne 0 ]; then
   exit $status
+fi`, exe, evalFlag),
+		},
+		{
+			name:   "commit-msg",
+			script: fmt.Sprintf(`%q commit-msg --finalize-eval "$1"`, exe),
+		},
+		{
+			name: "post-commit",
+		},
+		{
+			name: "pre-rebase",
+		},
+		{
+			name: "post-checkout",
+		},
+		{
+			name: "post-merge",
+		},
+		{
+			name: "pre-push",
+		},
+		{
+			name: "pre-auto-gc",
+		},
+		{
+			name: "post-rewrite",
+		},
+		{
+			name: "sendemail-validate",
+		},
+		{
+			name: "reference-transaction",
+		},
+	}
+
+	scriptTemplate := `#!/bin/sh
+
+# --- 1. Global Hook Logic ---
+%s
+
+
+# --- 2. Local .git/hooks Fallthrough ---
+HOOK_NAME=$(basename "$0")
+# Safely get the real local hooks dir (works for worktrees and submodules too)
+HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null)
+LOCAL_HOOK="$HOOKS_DIR/$HOOK_NAME"
+
+if [ -n "$HOOKS_DIR" ] && [ -x "$LOCAL_HOOK" ]; then
+    # Prevent infinite loops if local symlinks back to global
+    GLOBAL_REAL=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null)
+    LOCAL_REAL=$(realpath "$LOCAL_HOOK" 2>/dev/null || readlink -f "$LOCAL_HOOK" 2>/dev/null)
+
+    if [ "$GLOBAL_REAL" != "$LOCAL_REAL" ]; then
+        exec "$LOCAL_HOOK" "$@"
+    fi
 fi
 
-if command -v lefthook >/dev/null 2>&1; then
-  if [ -f "lefthook.yml" ] || [ -f ".lefthook.yml" ] || [ -f "lefthook-local.yml" ] || [ -f ".lefthook-local.yml" ]; then
-    lefthook run prepare-commit-msg "$@"
-  fi
-fi
-`, exe, evalFlag)
-
-	postHookScript := fmt.Sprintf(`#!/bin/sh
-%q commit-msg --finalize-eval "$1"
-`, exe)
+exit 0`
 
 	var hooksDir string
 	if global {
@@ -188,28 +266,39 @@ fi
 		}
 	}
 
-	prepHookPath := filepath.Join(hooksDir, "prepare-commit-msg")
-	if err := os.WriteFile(prepHookPath, []byte(prepHookScript), 0755); err != nil { //nolint:gosec
-		return fmt.Errorf("writing prepare-commit-msg hook: %w", err)
-	}
-
-	postHookPath := filepath.Join(hooksDir, "commit-msg")
-	if err := os.WriteFile(postHookPath, []byte(postHookScript), 0755); err != nil { //nolint:gosec
-		return fmt.Errorf("writing commit-msg hook: %w", err)
+	for _, h := range hooks {
+		hookPath := filepath.Join(hooksDir, h.name)
+		fullScript := fmt.Sprintf(scriptTemplate, h.script)
+		if err := os.WriteFile(hookPath, []byte(fullScript), 0755); err != nil { //nolint:gosec
+			return fmt.Errorf("writing %s hook: %w", h.name, err)
+		}
 	}
 
 	if output.JSON() {
-		output.Write("commit-msg-install", map[string]any{"hook_path": prepHookPath, "global": global}, nil)
+		output.Write("commit-msg-install", map[string]any{"hook_path": hooksDir, "global": global}, nil)
 		return nil
 	}
 
 	if global {
-		fmt.Printf("Installed global prepare-commit-msg and commit-msg hooks at %s\n", hooksDir)
+		fmt.Printf("Installed global hooks at %s\n", hooksDir)
 	} else {
-		fmt.Printf("Installed local prepare-commit-msg and commit-msg hooks at %s\n", hooksDir)
+		fmt.Printf("Installed local hooks at %s\n", hooksDir)
 	}
 
 	return nil
+}
+
+// ResolveEvalDir returns the flag value if non-empty, otherwise defaults to
+// ~/.agents/eval/live_feedback.
+func ResolveEvalDir(flagVal string) (string, error) {
+	if flagVal != "" {
+		return flagVal, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home dir for eval dir: %w", err)
+	}
+	return filepath.Join(home, ".agents", "eval", "live_feedback"), nil
 }
 
 func init() {

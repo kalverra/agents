@@ -161,8 +161,8 @@ func TestRunner_EvalMode_IncludesLLMMetrics(t *testing.T) {
 	assert.Equal(t, "feat(foo): add foo.txt", res.Message)
 
 	outStr := feedbackOutput.String()
-	assert.Contains(t, outStr, "Live evaluation saved to file://")
-	assert.Contains(t, outStr, "Transcript saved to file://")
+	assert.Contains(t, outStr, "Live evaluation saved to vscode://file/")
+	assert.Contains(t, outStr, "Transcript saved to vscode://file/")
 
 	entries, err := os.ReadDir(evalDir)
 	require.NoError(t, err)

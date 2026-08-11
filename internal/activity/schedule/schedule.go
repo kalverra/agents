@@ -32,6 +32,7 @@ type Schedule struct {
 	Weekly    string
 	Monthly   string
 	Quarterly string
+	Finalize  string
 }
 
 // Scheduler writes and manages launchd plists.
@@ -46,6 +47,7 @@ type Scheduler struct {
 	UID         string
 	Logger      zerolog.Logger
 	Schedule    Schedule
+	Eval        bool
 	Run         func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
@@ -55,6 +57,7 @@ type Status struct {
 	Weekly    bool
 	Monthly   bool
 	Quarterly bool
+	Finalize  bool
 }
 
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
@@ -79,6 +82,9 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
         {{- if .Model}}
         <string>--model</string>
         <string>{{.Model}}</string>
+        {{- end}}
+        {{- if .Eval}}
+        <string>--eval</string>
         {{- end}}
     </array>
     <key>StartCalendarInterval</key>
@@ -112,6 +118,41 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+const finalizePlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{.Label}}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{.Binary}}</string>
+        <string>activity</string>
+        <string>finalize</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        {{- range .Intervals}}
+        <dict>
+            {{- if .WeekdaySet}}
+            <key>Weekday</key>
+            <integer>{{.Weekday}}</integer>
+            {{- end}}
+            <key>Hour</key>
+            <integer>{{.Hour}}</integer>
+            <key>Minute</key>
+            <integer>{{.Minute}}</integer>
+        </dict>
+        {{- end}}
+    </array>
+    <key>StandardOutPath</key>
+    <string>{{.LogDir}}/finalize.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{.LogDir}}/finalize.err.log</string>
+</dict>
+</plist>
+`
+
 // Install writes plists and loads launchd jobs for each configured schedule.
 func (s *Scheduler) Install(ctx context.Context) error {
 	if err := os.MkdirAll(s.PlistDir, 0750); err != nil {
@@ -141,6 +182,13 @@ func (s *Scheduler) Install(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("%s: %w", m.mode, err))
 		}
 	}
+
+	if strings.TrimSpace(s.Schedule.Finalize) != "" {
+		if err := s.installFinalize(ctx, s.Schedule.Finalize); err != nil {
+			errs = append(errs, fmt.Errorf("finalize: %w", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("install errors: %v", errs)
 	}
@@ -178,6 +226,7 @@ func (s *Scheduler) installMode(ctx context.Context, mode, spec string) error {
 		"Project":   s.Project,
 		"Provider":  s.Provider,
 		"Model":     s.Model,
+		"Eval":      s.Eval,
 		"Intervals": intervals,
 		"LogDir":    s.LogDir,
 	}); err != nil {
@@ -193,9 +242,51 @@ func (s *Scheduler) installMode(ctx context.Context, mode, spec string) error {
 	return nil
 }
 
+func (s *Scheduler) installFinalize(ctx context.Context, spec string) error {
+	label := s.LabelPrefix + "-finalize"
+	plistPath := filepath.Join(s.PlistDir, label+".plist")
+
+	intervals, err := ParseFinalizeSchedule(spec)
+	if err != nil {
+		return fmt.Errorf("parsing finalize schedule: %w", err)
+	}
+
+	if _, err := s.bootout(ctx, label); err != nil {
+		s.Logger.Debug().Err(err).Str("label", label).Msg("bootout before install failed (likely not loaded)")
+	}
+
+	tmpl, err := template.New("finalize_plist").Parse(finalizePlistTemplate)
+	if err != nil {
+		return fmt.Errorf("parsing finalize plist template: %w", err)
+	}
+
+	f, err := os.Create(plistPath) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("creating finalize plist: %w", err)
+	}
+	defer f.Close() //nolint:errcheck
+
+	if err := tmpl.Execute(f, map[string]any{
+		"Label":     label,
+		"Binary":    s.BinaryPath,
+		"Intervals": intervals,
+		"LogDir":    s.LogDir,
+	}); err != nil {
+		return fmt.Errorf("writing finalize plist: %w", err)
+	}
+
+	if _, err := s.run(ctx, "launchctl", "bootstrap", "gui/"+s.UID, plistPath); err != nil {
+		return fmt.Errorf("bootstrap finalize failed: %w", err)
+	}
+	if _, err := s.run(ctx, "launchctl", "enable", "gui/"+s.UID+"/"+label); err != nil {
+		s.Logger.Debug().Err(err).Str("label", label).Msg("enable after bootstrap finalize failed")
+	}
+	return nil
+}
+
 // Uninstall unloads and removes launchd jobs for each configured schedule.
 func (s *Scheduler) Uninstall(ctx context.Context) error {
-	modes := []string{"daily", "weekly", "monthly", "quarterly"}
+	modes := []string{"daily", "weekly", "monthly", "quarterly", "finalize"}
 	var errs []error
 	for _, mode := range modes {
 		label := s.LabelPrefix + "-" + mode
@@ -225,6 +316,7 @@ func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 		Weekly:    strings.Contains(outStr, s.LabelPrefix+"-weekly"),
 		Monthly:   strings.Contains(outStr, s.LabelPrefix+"-monthly"),
 		Quarterly: strings.Contains(outStr, s.LabelPrefix+"-quarterly"),
+		Finalize:  strings.Contains(outStr, s.LabelPrefix+"-finalize"),
 	}, nil
 }
 
@@ -321,5 +413,52 @@ func ParseSchedule(mode, spec string) ([]Interval, error) {
 		return expanded, nil
 	}
 
+	return intervals, nil
+}
+
+// ParseFinalizeSchedule generates intervals for running every N minutes during business hours (09:00-17:59) on weekdays.
+// Spec format: "weekday-bh:HH:MM" where HH:MM is the interval (e.g. "weekday-bh:00:30" = every 30 minutes).
+func ParseFinalizeSchedule(spec string) ([]Interval, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(spec, ":")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("finalize schedule spec %q must be weekday-bh:HH:MM", spec)
+	}
+
+	if parts[0] != "weekday-bh" {
+		return nil, fmt.Errorf("finalize schedule spec must start with 'weekday-bh', got: %q", parts[0])
+	}
+
+	hourInt, err := strconv.Atoi(parts[1])
+	if err != nil || hourInt < 0 {
+		return nil, fmt.Errorf("invalid hour interval: %v", err)
+	}
+	minInt, err := strconv.Atoi(parts[2])
+	if err != nil || minInt < 0 {
+		return nil, fmt.Errorf("invalid minute interval: %v", err)
+	}
+
+	totalMinInterval := hourInt*60 + minInt
+	if totalMinInterval <= 0 {
+		return nil, fmt.Errorf("interval must be greater than 0")
+	}
+
+	var intervals []Interval
+	for wd := 1; wd <= 5; wd++ {
+		for h := 9; h <= 17; h++ {
+			for m := 0; m < 60; m += totalMinInterval {
+				intervals = append(intervals, Interval{
+					Weekday:    wd,
+					WeekdaySet: true,
+					Hour:       h,
+					Minute:     m,
+				})
+			}
+		}
+	}
 	return intervals, nil
 }

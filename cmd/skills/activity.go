@@ -123,12 +123,18 @@ var activityReviewCmd = &cobra.Command{
 
 		evalMode, _ := cmd.Flags().GetBool("eval")
 
+		evalDir := cfg.ActivityEvalDir
+		if evalDir == "" {
+			evalDir = filepath.Join(home, ".agents", "eval", "live_feedback")
+		}
+
 		runner := &review.Runner{
 			Fetcher:    fetcher,
 			LLM:        llmRunner,
 			Poster:     poster,
 			ReportsDir: reportsDir,
 			PromptsDir: promptsDir,
+			EvalDir:    evalDir,
 			ProjectID:  projectID,
 			Logger:     *logger,
 			EvalMode:   evalMode,
@@ -230,11 +236,13 @@ func newScheduler(cmd *cobra.Command, cfg *config.Config, projectName string) (*
 		Model:       model,
 		UID:         strconv.Itoa(os.Getuid()),
 		Logger:      *zerolog.Ctx(cmd.Context()),
+		Eval:        true,
 		Schedule: schedule.Schedule{
-			Daily:     nonEmpty(cfg.ActivityScheduleDaily, "weekday:09:30"),
+			Daily:     nonEmpty(cfg.ActivityScheduleDaily, "weekday:09:00"),
 			Weekly:    nonEmpty(cfg.ActivityScheduleWeekly, "fri:15:30"),
 			Monthly:   nonEmpty(cfg.ActivityScheduleMonthly, "28:16:30"),
 			Quarterly: nonEmpty(cfg.ActivityScheduleQuarterly, "28:16:30"),
+			Finalize:  nonEmpty(cfg.ActivityScheduleFinalize, "weekday-bh:00:30"),
 		},
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return exec.CommandContext(ctx, name, args...).CombinedOutput() //nolint:gosec
@@ -327,6 +335,7 @@ var activityScheduleStatusCmd = &cobra.Command{
 				"weekly":    status.Weekly,
 				"monthly":   status.Monthly,
 				"quarterly": status.Quarterly,
+				"finalize":  status.Finalize,
 			}, nil)
 			return nil
 		}
@@ -334,6 +343,7 @@ var activityScheduleStatusCmd = &cobra.Command{
 		fmt.Printf("Weekly:    %t\n", status.Weekly)
 		fmt.Printf("Monthly:   %t\n", status.Monthly)
 		fmt.Printf("Quarterly: %t\n", status.Quarterly)
+		fmt.Printf("Finalize:  %t\n", status.Finalize)
 		return nil
 	},
 }
@@ -363,6 +373,57 @@ var activityModelsCmd = &cobra.Command{
 	},
 }
 
+var activityFinalizeCmd = &cobra.Command{
+	Use:   "finalize",
+	Short: "Check pending activity reports for user-reviewed scores and save eval records",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := config.Load(config.WithFlags(cmd.Root().PersistentFlags()))
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("home dir: %w", err)
+		}
+
+		reportsDir := cfg.ActivityReportsDir
+		if reportsDir == "" {
+			reportsDir = filepath.Join(home, ".agents", "reports", "activity")
+		}
+		evalDir := cfg.ActivityEvalDir
+		if evalDir == "" {
+			evalDir = filepath.Join(home, ".agents", "eval", "live_feedback")
+		}
+
+		logger := zerolog.Ctx(cmd.Context())
+		finalizer := &review.Finalizer{
+			ReportsDir: reportsDir,
+			EvalDir:    evalDir,
+			Logger:     *logger,
+		}
+
+		results, err := finalizer.Run(cmd.Context())
+		if err != nil {
+			return err
+		}
+
+		if output.JSON() {
+			output.Write("activity-finalize", results, nil)
+			return nil
+		}
+
+		if len(results) == 0 {
+			fmt.Println("No pending reports to finalize.")
+			return nil
+		}
+		for _, r := range results {
+			fmt.Printf("Finalized %s (score: %d, reason: %s)\n", filepath.Base(r.ReportPath), r.Score, r.Reason)
+		}
+		return nil
+	},
+}
+
 func init() {
 	activityFetchCmd.Flags().
 		String("since", "7d", "Timeframe window (e.g. 1d, 7d, 30d, today, yesterday, week, month, quarter, 24h)")
@@ -383,5 +444,11 @@ func init() {
 	activityScheduleCmd.Flags().String("model", "", "Model identifier or GGUF path for scheduled jobs")
 	activityScheduleCmd.AddCommand(activityScheduleInstallCmd, activityScheduleUninstallCmd, activityScheduleStatusCmd)
 
-	ActivityCmd.AddCommand(activityFetchCmd, activityReviewCmd, activityScheduleCmd, activityModelsCmd)
+	ActivityCmd.AddCommand(
+		activityFetchCmd,
+		activityReviewCmd,
+		activityScheduleCmd,
+		activityModelsCmd,
+		activityFinalizeCmd,
+	)
 }

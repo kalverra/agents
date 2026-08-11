@@ -338,5 +338,5 @@ func fileURILink(path string) string {
 	if err != nil {
 		absPath = path
 	}
-	return fmt.Sprintf("file://%s", absPath)
+	return fmt.Sprintf("vscode://file/%s", absPath)
 }

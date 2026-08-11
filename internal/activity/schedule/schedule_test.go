@@ -72,6 +72,51 @@ func TestParseSchedule_Invalid(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseFinalizeSchedule(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		spec    string
+		wantLen int
+		wantErr bool
+	}{
+		{
+			name:    "valid 30 min interval",
+			spec:    "weekday-bh:00:30",
+			wantLen: 90, // 5 days * 18 slots
+		},
+		{
+			name:    "valid 60 min interval",
+			spec:    "weekday-bh:01:00",
+			wantLen: 45, // 5 days * 9 slots
+		},
+		{
+			name:    "invalid format",
+			spec:    "daily:00:30",
+			wantErr: true,
+		},
+		{
+			name:    "invalid numbers",
+			spec:    "weekday-bh:xx:yy",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			intervals, err := schedule.ParseFinalizeSchedule(tc.spec)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, intervals, tc.wantLen)
+			}
+		})
+	}
+}
+
 func TestScheduler_Install(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +153,66 @@ func TestScheduler_Install(t *testing.T) {
 		assert.FileExists(t, filepath.Join(plistDir, "com.test.activity-"+mode+".plist"))
 	}
 	require.Len(t, calls, 12) // bootout + bootstrap + enable per mode
+}
+
+func TestScheduler_Install_WithEval(t *testing.T) {
+	t.Parallel()
+
+	plistDir := t.TempDir()
+	logDir := t.TempDir()
+	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, nil
+	}
+
+	s := &schedule.Scheduler{
+		PlistDir:    plistDir,
+		LogDir:      logDir,
+		BinaryPath:  "/Users/me/.agents/agents",
+		LabelPrefix: "com.test.activity",
+		UID:         "501",
+		Project:     "Work",
+		Eval:        true,
+		Logger:      zerolog.New(nil),
+		Schedule: schedule.Schedule{
+			Daily: "weekday:08:30",
+		},
+		Run: run,
+	}
+
+	require.NoError(t, s.Install(context.Background()))
+	content, err := os.ReadFile(filepath.Join(plistDir, "com.test.activity-daily.plist")) //nolint:gosec
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "<string>--eval</string>")
+}
+
+func TestScheduler_Install_Finalize(t *testing.T) {
+	t.Parallel()
+
+	plistDir := t.TempDir()
+	logDir := t.TempDir()
+	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, nil
+	}
+
+	s := &schedule.Scheduler{
+		PlistDir:    plistDir,
+		LogDir:      logDir,
+		BinaryPath:  "/Users/me/.agents/agents",
+		LabelPrefix: "com.test.activity",
+		UID:         "501",
+		Logger:      zerolog.New(nil),
+		Schedule: schedule.Schedule{
+			Finalize: "weekday-bh:00:30",
+		},
+		Run: run,
+	}
+
+	require.NoError(t, s.Install(context.Background()))
+	content, err := os.ReadFile(filepath.Join(plistDir, "com.test.activity-finalize.plist")) //nolint:gosec
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "<string>activity</string>")
+	assert.Contains(t, string(content), "<string>finalize</string>")
+	assert.Contains(t, string(content), "<key>Minute</key>\n            <integer>30</integer>")
 }
 
 func TestScheduler_Install_WithProviderModel(t *testing.T) {
@@ -169,10 +274,13 @@ func TestScheduler_Uninstall(t *testing.T) {
 
 	path := filepath.Join(plistDir, "com.test.activity-daily.plist")
 	require.NoError(t, os.WriteFile(path, []byte("plist"), 0600))
+	finalizePath := filepath.Join(plistDir, "com.test.activity-finalize.plist")
+	require.NoError(t, os.WriteFile(finalizePath, []byte("plist"), 0600))
 
 	require.NoError(t, s.Uninstall(context.Background()))
 	assert.NoFileExists(t, path)
-	require.Len(t, calls, 4) // one bootout per mode
+	assert.NoFileExists(t, finalizePath)
+	require.Len(t, calls, 5) // one bootout per mode + finalize
 }
 
 func TestScheduler_Status(t *testing.T) {

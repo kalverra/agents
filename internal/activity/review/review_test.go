@@ -48,7 +48,8 @@ func TestRunner_Run(t *testing.T) {
 
 	require.NotNil(t, poster.req)
 	assert.Equal(t, "Daily Standup — 2026-08-06", poster.req.Title)
-	assert.Contains(t, poster.req.Description, "generated report")
+	assert.Contains(t, poster.req.Description, "vscode://file/")
+	assert.NotContains(t, poster.req.Description, "generated report")
 	assert.Equal(t, "today at 10:00", poster.req.DueString)
 }
 
@@ -184,4 +185,70 @@ type fakePoster struct {
 func (f *fakePoster) CreateTask(_ context.Context, req ticket.CreateTaskRequest) (*ticket.Ticket, error) {
 	f.req = &req
 	return &ticket.Ticket{ID: "task-1", URL: "https://todoist.com/task-1"}, nil
+}
+
+func TestParseReportFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	content := "---\neval_status: pending\nscore: 0\nreason: \"\"\n---\n# Title\nBody"
+	fm, body, err := review.ParseReportFrontmatter(content)
+	require.NoError(t, err)
+	require.NotNil(t, fm)
+	assert.Equal(t, "pending", fm.EvalStatus)
+	assert.Equal(t, 0, fm.Score)
+	assert.Empty(t, fm.Reason)
+	assert.Equal(t, "# Title\nBody", body)
+
+	contentNoFm := "# Title\nBody"
+	fm, body, err = review.ParseReportFrontmatter(contentNoFm)
+	require.NoError(t, err)
+	assert.Nil(t, fm)
+	assert.Equal(t, "# Title\nBody", body)
+
+	contentEmptyBody := "---\neval_status: pending\nscore: 0\nreason: \"\"\n---\n"
+	fm, body, err = review.ParseReportFrontmatter(contentEmptyBody)
+	require.NoError(t, err)
+	require.NotNil(t, fm)
+	assert.Empty(t, body)
+}
+
+func TestStripFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	content := "---\neval_status: pending\nscore: 0\nreason: \"\"\n---\n# Title\nBody"
+	body := review.StripFrontmatter(content)
+	assert.Equal(t, "# Title\nBody", body)
+
+	contentNoFm := "# Title\nBody"
+	body = review.StripFrontmatter(contentNoFm)
+	assert.Equal(t, "# Title\nBody", body)
+}
+
+func TestRunner_Run_DeferredEval(t *testing.T) {
+	t.Parallel()
+
+	reportsDir := t.TempDir()
+	promptsDir := t.TempDir()
+	evalDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(promptsDir, "daily.md"), []byte("Daily\n{{ACTIVITY_XML}}"), 0600))
+
+	poster := &fakePoster{}
+	runner := &review.Runner{
+		Fetcher:    &fakeFetcher{report: &activity.Report{Timeframe: "1d"}},
+		LLM:        &fakeLLM{response: "generated report"},
+		Poster:     poster,
+		ReportsDir: reportsDir,
+		PromptsDir: promptsDir,
+		Now:        func() time.Time { return time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC) },
+		Logger:     zerolog.New(nil),
+		EvalMode:   true,
+		EvalDir:    evalDir,
+	}
+
+	_, err := runner.Run(context.Background(), "daily", "", "Work", false)
+	require.NoError(t, err)
+
+	entries, err := os.ReadDir(evalDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
 }

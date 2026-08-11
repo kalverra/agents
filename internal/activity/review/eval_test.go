@@ -1,7 +1,6 @@
 package review_test
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -26,22 +25,17 @@ func TestRunner_Run_EvalModeCapturesFeedback(t *testing.T) {
 	evalDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(promptsDir, "daily.md"), []byte("Daily\n{{ACTIVITY_XML}}"), 0600))
 
-	inReader := bytes.NewBufferString("4\nDetailed but a bit verbose\n")
-	outWriter := &bytes.Buffer{}
-
 	runner := &review.Runner{
-		Fetcher:        &fakeFetcher{report: &activity.Report{Timeframe: "1d"}},
-		LLM:            &fakeLLM{response: "daily activity summary"},
-		ReportsDir:     reportsDir,
-		PromptsDir:     promptsDir,
-		Now:            func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
-		Logger:         zerolog.New(nil),
-		EvalMode:       true,
-		EvalDir:        evalDir,
-		FeedbackReader: inReader,
-		FeedbackWriter: outWriter,
-		Provider:       "agy",
-		Model:          "gemini-3.6-flash-high",
+		Fetcher:    &fakeFetcher{report: &activity.Report{Timeframe: "1d"}},
+		LLM:        &fakeLLM{response: "daily activity summary"},
+		ReportsDir: reportsDir,
+		PromptsDir: promptsDir,
+		Now:        func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+		Logger:     zerolog.New(nil),
+		EvalMode:   true,
+		EvalDir:    evalDir,
+		Provider:   "agy",
+		Model:      "gemini-3.6-flash-high",
 	}
 
 	res, err := runner.Run(context.Background(), "daily", "", "Work", true)
@@ -65,8 +59,8 @@ func TestRunner_Run_EvalModeCapturesFeedback(t *testing.T) {
 
 	assert.Equal(t, "activity", rec.Command)
 	assert.Equal(t, "daily", rec.Mode)
-	assert.Equal(t, 4, rec.UserScore)
-	assert.Equal(t, "Detailed but a bit verbose", rec.UserReason)
+	assert.Equal(t, 0, rec.UserScore)
+	assert.Empty(t, rec.UserReason)
 	assert.Equal(t, "daily activity summary", rec.Response)
 	assert.Equal(t, "gemini-3.6-flash-high", rec.Model)
 	assert.Equal(t, "agy", rec.Provider)

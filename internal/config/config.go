@@ -64,6 +64,10 @@ type Config struct {
 	ActivityScheduleMonthly string `mapstructure:"activity_schedule_monthly"`
 	// ActivityScheduleQuarterly is when the quarterly report runs (e.g. "28:17:00"). Env: ACTIVITY_SCHEDULE_QUARTERLY.
 	ActivityScheduleQuarterly string `mapstructure:"activity_schedule_quarterly"`
+	// ActivityScheduleFinalize is when the finalize job runs (e.g. "weekday-bh:00:30"). Env: ACTIVITY_SCHEDULE_FINALIZE.
+	ActivityScheduleFinalize string `mapstructure:"activity_schedule_finalize"`
+	// ActivityEvalDir is where eval feedback records are stored. Env: ACTIVITY_EVAL_DIR.
+	ActivityEvalDir string `mapstructure:"activity_eval_dir"`
 }
 
 const (

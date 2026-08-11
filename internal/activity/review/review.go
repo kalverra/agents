@@ -5,19 +5,56 @@ package review
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
+	"gopkg.in/yaml.v3"
 
 	"github.com/kalverra/agents/internal/activity"
 	"github.com/kalverra/agents/internal/eval"
 	"github.com/kalverra/agents/internal/ticket"
 	prompts "github.com/kalverra/agents/prompts/activity"
 )
+
+// ReportFrontmatter holds the YAML frontmatter from a report file.
+type ReportFrontmatter struct {
+	EvalStatus string `yaml:"eval_status"`
+	Score      int    `yaml:"score"`
+	Reason     string `yaml:"reason"`
+}
+
+// ParseReportFrontmatter extracts YAML frontmatter and body from report content.
+// Returns nil frontmatter if no frontmatter found.
+func ParseReportFrontmatter(content string) (*ReportFrontmatter, string, error) {
+	if !strings.HasPrefix(content, "---\n") {
+		return nil, content, nil
+	}
+	parts := strings.SplitN(content, "---\n", 3)
+	if len(parts) < 3 {
+		return nil, content, nil
+	}
+
+	var fm ReportFrontmatter
+	if err := yaml.Unmarshal([]byte(parts[1]), &fm); err != nil {
+		return nil, content, fmt.Errorf("parsing frontmatter: %w", err)
+	}
+	return &fm, parts[2], nil
+}
+
+// StripFrontmatter returns the report body without YAML frontmatter.
+func StripFrontmatter(content string) string {
+	if !strings.HasPrefix(content, "---\n") {
+		return content
+	}
+	parts := strings.SplitN(content, "---\n", 3)
+	if len(parts) < 3 {
+		return content
+	}
+	return parts[2]
+}
 
 // Fetcher loads an activity report for a timeframe.
 type Fetcher interface {
@@ -36,20 +73,18 @@ type Poster interface {
 
 // Runner holds the dependencies for a review run.
 type Runner struct {
-	Fetcher        Fetcher
-	LLM            LLM
-	Poster         Poster
-	ReportsDir     string
-	PromptsDir     string
-	ProjectID      string
-	Now            func() time.Time
-	Logger         zerolog.Logger
-	EvalMode       bool
-	EvalDir        string
-	FeedbackReader io.Reader
-	FeedbackWriter io.Writer
-	Provider       string
-	Model          string
+	Fetcher    Fetcher
+	LLM        LLM
+	Poster     Poster
+	ReportsDir string
+	PromptsDir string
+	ProjectID  string
+	Now        func() time.Time
+	Logger     zerolog.Logger
+	EvalMode   bool
+	EvalDir    string
+	Provider   string
+	Model      string
 }
 
 // Result is the output of a review run.
@@ -91,7 +126,7 @@ func (r *Runner) Run(ctx context.Context, mode, timeframe, projectName string, d
 		return nil, fmt.Errorf("running LLM: %w", err)
 	}
 
-	reportContent := buildReportContent(mode, now, generated)
+	reportContent := buildReportContentWithEval(mode, now, generated, r.EvalMode)
 	reportPath, err := r.writeReport(mode, now, reportContent)
 	if err != nil {
 		return nil, fmt.Errorf("writing report: %w", err)
@@ -110,7 +145,7 @@ func (r *Runner) Run(ctx context.Context, mode, timeframe, projectName string, d
 		title := reportTitle(mode, now)
 		task, err := r.Poster.CreateTask(ctx, ticket.CreateTaskRequest{
 			Title:       title,
-			Description: generated + "\n\nReport: " + reportPath,
+			Description: fmt.Sprintf("Review and score: [%s](vscode://file/%s)", filepath.Base(reportPath), reportPath),
 			ProjectID:   r.ProjectID,
 			DueString:   reportDueString(mode),
 		})
@@ -122,22 +157,9 @@ func (r *Runner) Run(ctx context.Context, mode, timeframe, projectName string, d
 	}
 
 	if r.EvalMode {
-		in := r.FeedbackReader
-		if in == nil {
-			in = os.Stdin
-		}
-		out := r.FeedbackWriter
-		if out == nil {
-			out = os.Stdout
-		}
 		evalDir := r.EvalDir
 		if evalDir == "" {
 			evalDir = filepath.Join("eval", "live_feedback")
-		}
-
-		score, reason, promptErr := eval.PromptUserFeedback(in, out)
-		if promptErr != nil {
-			return nil, fmt.Errorf("prompting for live feedback: %w", promptErr)
 		}
 
 		model := r.Model
@@ -165,16 +187,15 @@ func (r *Runner) Run(ctx context.Context, mode, timeframe, projectName string, d
 			Model:      model,
 			Provider:   provider,
 			Response:   generated,
-			UserScore:  score,
-			UserReason: reason,
 			Metadata: map[string]string{
-				"timeframe": timeframe,
-				"project":   projectName,
+				"timeframe":   timeframe,
+				"project":     projectName,
+				"report_path": reportPath,
 			},
 		}
 
-		if _, saveErr := eval.SaveLiveFeedback(evalDir, rec); saveErr != nil {
-			return nil, fmt.Errorf("saving live feedback: %w", saveErr)
+		if _, saveErr := eval.SavePendingLiveFeedback(evalDir, rec); saveErr != nil {
+			return nil, fmt.Errorf("saving pending live feedback: %w", saveErr)
 		}
 	}
 
@@ -237,8 +258,15 @@ func reportDueString(mode string) string {
 	return "today at 10:00"
 }
 
-func buildReportContent(mode string, now time.Time, generated string) string {
+func buildReportContentWithEval(mode string, now time.Time, generated string, evalMode bool) string {
 	var b strings.Builder
+	if evalMode {
+		b.WriteString("---\n")
+		b.WriteString("eval_status: pending\n")
+		b.WriteString("score: 0\n")
+		b.WriteString("reason: \"\"\n")
+		b.WriteString("---\n")
+	}
 	fmt.Fprintf(&b, "# %s\n\n", reportTitle(mode, now))
 	b.WriteString(generated)
 	b.WriteString("\n")
