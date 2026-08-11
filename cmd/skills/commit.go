@@ -87,8 +87,8 @@ var CommitMsgCmd = &cobra.Command{
 			CommitSource:  commitSource,
 			CommitSHA:     commitSHA,
 			EvalMode:      evalMode,
-			Provider:      provider,
-			Model:         model,
+			Provider:      llmCfg.Provider,
+			Model:         llmCfg.Model,
 		})
 		if err != nil {
 			return err

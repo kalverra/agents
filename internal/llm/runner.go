@@ -88,6 +88,19 @@ type Runner struct {
 	lastMetrics Metrics
 }
 
+// Model returns configured model or command.
+func (r *Runner) Model() string {
+	if r.cfg.Model != "" {
+		return r.cfg.Model
+	}
+	return r.cfg.Cmd
+}
+
+// Provider returns configured provider.
+func (r *Runner) Provider() string {
+	return r.cfg.Provider
+}
+
 // LastMetrics returns execution performance and token metrics from the last run.
 func (r *Runner) LastMetrics() Metrics {
 	r.mu.Lock()
@@ -420,6 +433,9 @@ func (r *Runner) runOllamaWithWoL(ctx context.Context, prompt string, prog *Prog
 		"prompt":     prompt,
 		"stream":     true,
 		"keep_alive": r.cfg.OllamaKeepAlive,
+		"options": map[string]any{
+			"num_predict": 4096,
+		},
 	}
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -519,7 +535,11 @@ func (r *Runner) preloadOllamaModel(ctx context.Context, step *Step) error {
 type ollamaStreamChunk struct {
 	Model              string `json:"model"`
 	Response           string `json:"response"`
+	Content            string `json:"content,omitempty"`
 	Thinking           string `json:"thinking,omitempty"`
+	Thought            string `json:"thought,omitempty"`
+	Reasoning          string `json:"reasoning,omitempty"`
+	ReasoningContent   string `json:"reasoning_content,omitempty"`
 	Done               bool   `json:"done"`
 	Error              string `json:"error,omitempty"`
 	LoadDuration       int64  `json:"load_duration,omitempty"`
@@ -599,8 +619,13 @@ func (r *Runner) decodeOllamaStream(
 
 		case res, ok := <-chunkChan:
 			if !ok || errors.Is(res.err, io.EOF) {
-				r.finalizeMetricsAndSteps(evalStep, genStep, fullText.Len(), thinkingText.String(), finalChunk)
-				return strings.TrimSpace(fullText.String()), nil
+				return r.finalizeMetricsAndSteps(
+					evalStep,
+					genStep,
+					fullText.String(),
+					thinkingText.String(),
+					finalChunk,
+				), nil
 			}
 
 			if res.err != nil {
@@ -615,7 +640,23 @@ func (r *Runner) decodeOllamaStream(
 				return "", err
 			}
 
-			if !firstToken && (chunk.Response != "" || chunk.Thinking != "" || chunk.Done) {
+			chunkThink := chunk.Thinking
+			if chunkThink == "" {
+				chunkThink = chunk.Thought
+			}
+			if chunkThink == "" {
+				chunkThink = chunk.Reasoning
+			}
+			if chunkThink == "" {
+				chunkThink = chunk.ReasoningContent
+			}
+
+			chunkResp := chunk.Response
+			if chunkResp == "" && chunk.Content != "" {
+				chunkResp = chunk.Content
+			}
+
+			if !firstToken && (chunkResp != "" || chunkThink != "" || chunk.Done) {
 				firstToken = true
 				stopTimer(loadTimer)
 				evalStep.Complete("Prompt evaluated")
@@ -624,30 +665,78 @@ func (r *Runner) decodeOllamaStream(
 				defer genTimer.Stop()
 			}
 
-			if chunk.Thinking != "" {
-				thinkingText.WriteString(chunk.Thinking)
+			if chunkThink != "" {
+				thinkingText.WriteString(chunkThink)
 			}
-			if chunk.Response != "" {
-				fullText.WriteString(chunk.Response)
+			if chunkResp != "" {
+				fullText.WriteString(chunkResp)
 			}
 
 			if chunk.Done {
 				finalChunk = chunk
-				r.finalizeMetricsAndSteps(evalStep, genStep, fullText.Len(), thinkingText.String(), finalChunk)
-				return strings.TrimSpace(fullText.String()), nil
+				return r.finalizeMetricsAndSteps(
+					evalStep,
+					genStep,
+					fullText.String(),
+					thinkingText.String(),
+					finalChunk,
+				), nil
 			}
 		}
 	}
 }
 
+// CleanThinkingAndResponse separates <think>...</think> reasoning blocks from response text, falling back to thinking content if response text is empty.
+func CleanThinkingAndResponse(rawFullText, rawThinking string) (string, string) {
+	resp := strings.TrimSpace(rawFullText)
+	think := strings.TrimSpace(rawThinking)
+
+	if strings.Contains(resp, "<think>") {
+		start := strings.Index(resp, "<think>")
+		end := strings.Index(resp, "</think>")
+		if end != -1 && end > start {
+			extractedThink := strings.TrimSpace(resp[start+7 : end])
+			if think == "" {
+				think = extractedThink
+			} else {
+				think = think + "\n" + extractedThink
+			}
+			afterThink := strings.TrimSpace(resp[end+8:])
+			if afterThink != "" {
+				resp = afterThink
+			} else {
+				resp = extractedThink
+			}
+		} else if start != -1 {
+			extractedThink := strings.TrimSpace(resp[start+7:])
+			if think == "" {
+				think = extractedThink
+			}
+			beforeThink := strings.TrimSpace(resp[:start])
+			if beforeThink != "" {
+				resp = beforeThink
+			} else {
+				resp = extractedThink
+			}
+		}
+	}
+
+	if resp == "" && think != "" {
+		resp = think
+	}
+
+	return resp, think
+}
+
 func (r *Runner) finalizeMetricsAndSteps(
 	evalStep, genStep *Step,
-	textLen int,
-	thinking string,
+	rawFullText, rawThinking string,
 	finalChunk ollamaStreamChunk,
-) {
+) string {
+	respText, thinkText := CleanThinkingAndResponse(rawFullText, rawThinking)
+
 	m := Metrics{
-		Thinking:           thinking,
+		Thinking:           thinkText,
 		PromptEvalCount:    finalChunk.PromptEvalCount,
 		PromptEvalDuration: time.Duration(finalChunk.PromptEvalDuration),
 		EvalCount:          finalChunk.EvalCount,
@@ -669,7 +758,8 @@ func (r *Runner) finalizeMetricsAndSteps(
 		evalStep.Complete(evalDetail)
 	}
 
-	completeGenStep(genStep, textLen, finalChunk)
+	completeGenStep(genStep, len(respText), finalChunk)
+	return respText
 }
 
 func completeGenStep(genStep *Step, textLen int, finalChunk ollamaStreamChunk) {

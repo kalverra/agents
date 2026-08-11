@@ -397,6 +397,164 @@ func TestRunner_Ollama_GenTimeout(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRunner_Ollama_ThinkingOnly_Fallback(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/generate" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if prompt, _ := req["prompt"].(string); prompt == "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"done":true}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = w.Write(
+				[]byte(
+					`{"model":"gemma4","thinking":"feat: generated in thinking channel","done":true,"eval_count":1500}` + "\n",
+				),
+			)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	r := llm.NewRunner(llm.Config{
+		Provider:   llm.ProviderOllama,
+		Model:      "gemma4:12b",
+		OllamaHost: strings.TrimPrefix(ts.URL, "http://"),
+		HTTPClient: ts.Client(),
+	})
+
+	out, err := r.Run(context.Background(), "commit message", "generate prompt")
+	require.NoError(t, err)
+	assert.Equal(t, "feat: generated in thinking channel", out)
+	assert.Equal(t, "feat: generated in thinking channel", r.LastMetrics().Thinking)
+}
+
+func TestRunner_Ollama_InlineThinkTag_Extracted(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/generate" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if prompt, _ := req["prompt"].(string); prompt == "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"done":true}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = w.Write(
+				[]byte(
+					`{"model":"gemma4","response":"<think>Analyzing changes...</think>\n\nfeat(llm): extract thinking tags","done":true,"eval_count":50}` + "\n",
+				),
+			)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	r := llm.NewRunner(llm.Config{
+		Provider:   llm.ProviderOllama,
+		Model:      "gemma4:12b",
+		OllamaHost: strings.TrimPrefix(ts.URL, "http://"),
+		HTTPClient: ts.Client(),
+	})
+
+	out, err := r.Run(context.Background(), "commit message", "generate prompt")
+	require.NoError(t, err)
+	assert.Equal(t, "feat(llm): extract thinking tags", out)
+	assert.Equal(t, "Analyzing changes...", r.LastMetrics().Thinking)
+}
+
+func TestRunner_Ollama_ReasoningContent_Field(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/generate" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if prompt, _ := req["prompt"].(string); prompt == "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"done":true}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = w.Write(
+				[]byte(
+					`{"model":"gemma4","reasoning_content":"reasoning in reasoning_content field","done":true,"eval_count":2000}` + "\n",
+				),
+			)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	r := llm.NewRunner(llm.Config{
+		Provider:   llm.ProviderOllama,
+		Model:      "gemma4:12b",
+		OllamaHost: strings.TrimPrefix(ts.URL, "http://"),
+		HTTPClient: ts.Client(),
+	})
+
+	out, err := r.Run(context.Background(), "commit message", "generate prompt")
+	require.NoError(t, err)
+	assert.Equal(t, "reasoning in reasoning_content field", out)
+	assert.Equal(t, "reasoning in reasoning_content field", r.LastMetrics().Thinking)
+}
+
+func TestRunner_Ollama_Sends_NumPredict(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/generate" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if prompt, _ := req["prompt"].(string); prompt != "" {
+				options, ok := req["options"].(map[string]any)
+				assert.True(t, ok)
+				assert.EqualValues(t, 4096, options["num_predict"])
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				_, _ = w.Write([]byte(`{"model":"gemma4","response":"ok","done":true}` + "\n"))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"done":true}`))
+			return
+		}
+	}))
+	defer ts.Close()
+
+	r := llm.NewRunner(llm.Config{
+		Provider:   llm.ProviderOllama,
+		Model:      "gemma4:12b",
+		OllamaHost: strings.TrimPrefix(ts.URL, "http://"),
+		HTTPClient: ts.Client(),
+	})
+
+	out, err := r.Run(context.Background(), "commit message", "generate prompt")
+	require.NoError(t, err)
+	assert.Equal(t, "ok", out)
+}
+
 func ext() string {
 	if runtime.GOOS == "windows" {
 		return ".bat"

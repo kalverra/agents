@@ -140,6 +140,19 @@ func (r *Runner) Run(ctx context.Context, mode, timeframe, projectName string, d
 			return nil, fmt.Errorf("prompting for live feedback: %w", promptErr)
 		}
 
+		model := r.Model
+		if model == "" {
+			if m, ok := r.LLM.(interface{ Model() string }); ok {
+				model = m.Model()
+			}
+		}
+		provider := r.Provider
+		if provider == "" {
+			if p, ok := r.LLM.(interface{ Provider() string }); ok {
+				provider = p.Provider()
+			}
+		}
+
 		promptFileName := fmt.Sprintf("prompts/activity/%s.md", mode)
 		rec := eval.LiveFeedbackRecord{
 			ID:         fmt.Sprintf("activity-%s-%s", mode, now.UTC().Format("20060102-150405")),
@@ -149,8 +162,8 @@ func (r *Runner) Run(ctx context.Context, mode, timeframe, projectName string, d
 			FullPrompt: rendered,
 			PromptFile: promptFileName,
 			PromptHash: eval.ComputePromptHash(prompt.Body),
-			Model:      r.Model,
-			Provider:   r.Provider,
+			Model:      model,
+			Provider:   provider,
 			Response:   generated,
 			UserScore:  score,
 			UserReason: reason,

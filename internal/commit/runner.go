@@ -170,6 +170,19 @@ func (r *Runner) Run(ctx context.Context, opts Options) (*Result, error) {
 			thinking = metricsGetter.LastMetrics().Thinking
 		}
 
+		model := opts.Model
+		if model == "" {
+			if m, ok := r.LLM.(interface{ Model() string }); ok {
+				model = m.Model()
+			}
+		}
+		provider := opts.Provider
+		if provider == "" {
+			if p, ok := r.LLM.(interface{ Provider() string }); ok {
+				provider = p.Provider()
+			}
+		}
+
 		rec := eval.LiveFeedbackRecord{
 			ID:         fmt.Sprintf("commit-%s", time.Now().UTC().Format("20060102-150405")),
 			Timestamp:  time.Now().UTC().Format(time.RFC3339),
@@ -177,8 +190,8 @@ func (r *Runner) Run(ctx context.Context, opts Options) (*Result, error) {
 			FullPrompt: renderedPrompt,
 			PromptFile: "prompts/commit/commit.md",
 			PromptHash: eval.ComputePromptHash(promptTemplate.Body),
-			Model:      opts.Model,
-			Provider:   opts.Provider,
+			Model:      model,
+			Provider:   provider,
 			Response:   generated,
 			Thinking:   thinking,
 			UserScore:  score,

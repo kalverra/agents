@@ -117,6 +117,9 @@ func (m *mockLLMWithMetrics) Run(_ context.Context, _, _ string) (string, error)
 	return m.response, nil
 }
 
+func (m *mockLLMWithMetrics) Model() string    { return "gemma4:31b" }
+func (m *mockLLMWithMetrics) Provider() string { return "ollama" }
+
 func (m *mockLLMWithMetrics) LastMetrics() map[string]string {
 	return map[string]string{
 		"prompt_eval_count":       "100",
@@ -179,6 +182,8 @@ func TestRunner_EvalMode_IncludesLLMMetrics(t *testing.T) {
 
 	data, err := os.ReadFile(jsonPath) //nolint:gosec
 	require.NoError(t, err)
+	assert.Contains(t, string(data), `"model": "gemma4:31b"`)
+	assert.Contains(t, string(data), `"provider": "ollama"`)
 	assert.Contains(t, string(data), `"prompt_eval_count": "100"`)
 	assert.Contains(t, string(data), `"eval_count": "20"`)
 
