@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,13 @@ func TestSaveAndLoadLiveFeedback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tempDir, filepath.Dir(savedPath))
 
+	transcriptPath := filepath.Join(tempDir, "live_"+rec.ID+".transcript.txt")
+	assert.FileExists(t, transcriptPath)
+	transcriptBytes, err := os.ReadFile(transcriptPath) //nolint:gosec
+	require.NoError(t, err)
+	assert.Contains(t, string(transcriptBytes), rec.FullPrompt)
+	assert.Contains(t, string(transcriptBytes), rec.Response)
+
 	loaded, err := eval.LoadLiveFeedback(savedPath)
 	require.NoError(t, err)
 
@@ -78,6 +86,7 @@ func TestPromptUserFeedback(t *testing.T) {
 
 	assert.Equal(t, 4, score)
 	assert.Equal(t, "Good summary but missed one ticket", reason)
+	assert.Contains(t, outWriter.String(), "Score response (1-5, 1=bad, 5=good): ")
 }
 
 func TestConvertLiveToCase(t *testing.T) {
@@ -129,9 +138,18 @@ func TestSaveAndFinalizeLiveFeedback(t *testing.T) {
 
 	entries, err := os.ReadDir(evalDir)
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	require.Len(t, entries, 2)
 
-	saved, err := eval.LoadLiveFeedback(filepath.Join(evalDir, entries[0].Name()))
+	var jsonPath string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			jsonPath = filepath.Join(evalDir, e.Name())
+			break
+		}
+	}
+	require.NotEmpty(t, jsonPath)
+
+	saved, err := eval.LoadLiveFeedback(jsonPath)
 	require.NoError(t, err)
 	assert.Equal(t, "feat: user edited commit message", saved.CorrectedResponse)
 }

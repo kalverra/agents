@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kalverra/agents/internal/eval"
 	"github.com/kalverra/agents/internal/git"
+	"github.com/kalverra/agents/internal/llm"
 	"github.com/kalverra/agents/internal/ticket"
 	prompts "github.com/kalverra/agents/prompts/commit"
 )
@@ -146,9 +148,26 @@ func (r *Runner) Run(ctx context.Context, opts Options) (*Result, error) {
 			evalDir = filepath.Join("eval", "live_feedback")
 		}
 
+		if opts.CommitMsgFile != "" {
+			_, _ = fmt.Fprintf(out, "Generated commit message written to %s:\n\n%s\n\n", opts.CommitMsgFile, generated)
+		} else {
+			_, _ = fmt.Fprintf(out, "Generated commit message:\n\n%s\n\n", generated)
+		}
+
 		score, reason, promptErr := eval.PromptUserFeedback(in, out)
 		if promptErr != nil {
 			return nil, fmt.Errorf("prompting for live feedback: %w", promptErr)
+		}
+
+		meta := map[string]string{
+			"branch":        diff.CurrentBranch,
+			"files_changed": fmt.Sprintf("%d", diff.Stats.FilesChanged),
+		}
+		extractLLMMetrics(r.LLM, meta)
+
+		thinking := ""
+		if metricsGetter, ok := r.LLM.(interface{ LastMetrics() llm.Metrics }); ok {
+			thinking = metricsGetter.LastMetrics().Thinking
 		}
 
 		rec := eval.LiveFeedbackRecord{
@@ -161,23 +180,26 @@ func (r *Runner) Run(ctx context.Context, opts Options) (*Result, error) {
 			Model:      opts.Model,
 			Provider:   opts.Provider,
 			Response:   generated,
+			Thinking:   thinking,
 			UserScore:  score,
 			UserReason: reason,
-			Metadata: map[string]string{
-				"branch":        diff.CurrentBranch,
-				"files_changed": fmt.Sprintf("%d", diff.Stats.FilesChanged),
-			},
+			Metadata:   meta,
 		}
 
+		var savedPath string
+		var saveErr error
 		if opts.CommitMsgFile != "" {
-			if _, saveErr := eval.SavePendingLiveFeedback(evalDir, rec); saveErr != nil {
-				return nil, fmt.Errorf("saving pending live feedback: %w", saveErr)
-			}
+			savedPath, saveErr = eval.SavePendingLiveFeedback(evalDir, rec)
 		} else {
-			if _, saveErr := eval.SaveLiveFeedback(evalDir, rec); saveErr != nil {
-				return nil, fmt.Errorf("saving live feedback: %w", saveErr)
-			}
+			savedPath, saveErr = eval.SaveLiveFeedback(evalDir, rec)
 		}
+		if saveErr != nil {
+			return nil, fmt.Errorf("saving live feedback: %w", saveErr)
+		}
+
+		transcriptPath := strings.TrimSuffix(savedPath, ".json") + ".transcript.txt"
+		_, _ = fmt.Fprintf(out, "Live evaluation saved to %s\n", fileURILink(savedPath))
+		_, _ = fmt.Fprintf(out, "Transcript saved to %s\n\n", fileURILink(transcriptPath))
 	}
 
 	return &Result{
@@ -262,4 +284,46 @@ func trimSurroundingQuotes(s string) string {
 		}
 	}
 	return s
+}
+
+func extractLLMMetrics(llmInstance LLM, meta map[string]string) {
+	if providerGetter, ok := llmInstance.(interface{ LastMetrics() map[string]string }); ok {
+		maps.Copy(meta, providerGetter.LastMetrics())
+	} else if metricsGetter, ok := llmInstance.(interface{ LastMetrics() llm.Metrics }); ok {
+		m := metricsGetter.LastMetrics()
+		if m.PromptEvalCount > 0 {
+			meta["prompt_eval_count"] = fmt.Sprintf("%d", m.PromptEvalCount)
+		}
+		if m.PromptEvalDuration > 0 {
+			meta["prompt_eval_duration"] = m.PromptEvalDuration.String()
+			durSec := m.PromptEvalDuration.Seconds()
+			if durSec > 0 {
+				meta["prompt_eval_tok_per_sec"] = fmt.Sprintf("%.1f", float64(m.PromptEvalCount)/durSec)
+			}
+		}
+		if m.EvalCount > 0 {
+			meta["eval_count"] = fmt.Sprintf("%d", m.EvalCount)
+		}
+		if m.EvalDuration > 0 {
+			meta["eval_duration"] = m.EvalDuration.String()
+			durSec := m.EvalDuration.Seconds()
+			if durSec > 0 {
+				meta["eval_tok_per_sec"] = fmt.Sprintf("%.1f", float64(m.EvalCount)/durSec)
+			}
+		}
+		if m.TotalDuration > 0 {
+			meta["total_duration"] = m.TotalDuration.String()
+		}
+		if m.LoadDuration > 0 {
+			meta["load_duration"] = m.LoadDuration.String()
+		}
+	}
+}
+
+func fileURILink(path string) string {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	return fmt.Sprintf("file://%s", absPath)
 }

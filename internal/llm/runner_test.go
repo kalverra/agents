@@ -87,10 +87,16 @@ func TestRunner_Run_Ollama_Available(t *testing.T) {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			assert.Equal(t, "gemma4", body["model"])
-			assert.Equal(t, "test prompt", body["prompt"])
 			assert.Equal(t, "2h", body["keep_alive"])
 
 			w.Header().Set("Content-Type", "application/json")
+			if prompt, _ := body["prompt"].(string); prompt == "" {
+				// Preload request MUST send stream: false
+				assert.Equal(t, false, body["stream"])
+				_, _ = w.Write([]byte(`{"done":true,"load_duration":2000000000}`))
+				return
+			}
+			assert.Equal(t, "test prompt", body["prompt"])
 			_, _ = w.Write([]byte(`{"response":"response from Ollama"}`))
 			return
 		}
@@ -132,6 +138,12 @@ func TestRunner_Run_Ollama_WakeOnLan_Success(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/generate" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if prompt, _ := body["prompt"].(string); prompt == "" {
+				_, _ = w.Write([]byte(`{"done":true}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"response":"wake up success"}`))
 			return
 		}
@@ -265,15 +277,22 @@ func TestRunner_Ollama_Streaming_ProgressSteps(t *testing.T) {
 		if r.URL.Path == "/api/generate" {
 			var req map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			if prompt, _ := req["prompt"].(string); prompt == "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"done":true,"load_duration":2000000000}`))
+				return
+			}
 			assert.Equal(t, true, req["stream"])
 
 			w.Header().Set("Content-Type", "application/x-ndjson")
-			// Chunk 1: Model load completed with load_duration = 2s
-			_, _ = w.Write([]byte(`{"model":"gemma4","response":"","done":false,"load_duration":2000000000}` + "\n"))
-			// Chunk 2: First text token
+			// Chunk 1: First text token after prompt evaluation
 			_, _ = w.Write([]byte(`{"model":"gemma4","response":"Hello ","done":false}` + "\n"))
-			// Chunk 3: Second text token and done
-			_, _ = w.Write([]byte(`{"model":"gemma4","response":"world","done":true,"eval_count":2}` + "\n"))
+			// Chunk 2: Second text token and done with prompt_eval and eval metrics
+			_, _ = w.Write(
+				[]byte(
+					`{"model":"gemma4","response":"world","done":true,"prompt_eval_count":10,"prompt_eval_duration":1000000000,"eval_count":2,"eval_duration":1000000000}` + "\n",
+				),
+			)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -297,7 +316,12 @@ func TestRunner_Ollama_Streaming_ProgressSteps(t *testing.T) {
 	assert.Contains(t, progressOutput, "Connect to Ollama")
 	assert.Contains(t, progressOutput, "Connected in ")
 	assert.Contains(t, progressOutput, "Load gemma4 into VRAM (Loaded in 2s)")
-	assert.Contains(t, progressOutput, "Generate Response (11 bytes, 2 tokens)")
+	assert.Contains(t, progressOutput, "Evaluate Prompt (10 prompt tokens, 10.0 tok/s)")
+	assert.Contains(t, progressOutput, "Generate Response (11 bytes, 2 tokens, 2.0 tok/s)")
+
+	metrics := r.LastMetrics()
+	assert.Equal(t, 10, metrics.PromptEvalCount)
+	assert.Equal(t, 2, metrics.EvalCount)
 }
 
 func TestRunner_Ollama_LoadTimeout(t *testing.T) {
@@ -340,9 +364,16 @@ func TestRunner_Ollama_GenTimeout(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/generate" {
+			var req map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if prompt, _ := req["prompt"].(string); prompt == "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"done":true}`))
+				return
+			}
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.(http.Flusher).Flush()
-			// Chunk 1: load done immediately
+			// Chunk 1: prompt evaluated
 			_, _ = w.Write([]byte(`{"model":"gemma4","response":"first ","done":false}` + "\n"))
 			w.(http.Flusher).Flush()
 			// Delay before second chunk past GenTimeout of 50ms

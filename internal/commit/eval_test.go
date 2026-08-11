@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,9 +47,16 @@ func TestRunner_Run_EvalModeCapturesFeedback(t *testing.T) {
 
 	entries, err := os.ReadDir(evalDir)
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	require.Len(t, entries, 2)
 
-	filePath := filepath.Join(evalDir, entries[0].Name())
+	var filePath string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			filePath = filepath.Join(evalDir, e.Name())
+			break
+		}
+	}
+	require.NotEmpty(t, filePath)
 	rec, err := eval.LoadLiveFeedback(filePath)
 	require.NoError(t, err)
 
@@ -58,6 +66,7 @@ func TestRunner_Run_EvalModeCapturesFeedback(t *testing.T) {
 	assert.Equal(t, "feat(foo): add foo.txt", rec.Response)
 	assert.Equal(t, "gemini-3.6-flash-high", rec.Model)
 	assert.Equal(t, "agy", rec.Provider)
+	assert.Contains(t, outWriter.String(), "feat(foo): add foo.txt")
 }
 
 func TestRunner_Run_EvalModePendingAndFinalize(t *testing.T) {

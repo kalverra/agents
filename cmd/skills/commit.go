@@ -112,10 +112,12 @@ var CommitMsgCmd = &cobra.Command{
 			return nil
 		}
 
-		if commitMsgFile != "" {
-			fmt.Printf("Generated commit message written to %s:\n\n%s\n", commitMsgFile, res.Message)
-		} else {
-			fmt.Println(res.Message)
+		if !evalMode {
+			if commitMsgFile != "" {
+				fmt.Printf("Generated commit message written to %s:\n\n%s\n", commitMsgFile, res.Message)
+			} else {
+				fmt.Println(res.Message)
+			}
 		}
 
 		return nil
@@ -138,6 +140,9 @@ func installGitHook(ctx context.Context, global bool, dir string, evalMode bool)
 	}
 
 	prepHookScript := fmt.Sprintf(`#!/bin/sh
+if [ -c /dev/tty ]; then
+  exec < /dev/tty
+fi
 %q commit-msg "$1" "$2" "$3"%s
 status=$?
 if [ $status -ne 0 ]; then

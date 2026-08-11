@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/mattn/go-isatty"
 )
 
 // LiveFeedbackRecord stores human rating and context for a live LLM execution.
@@ -26,6 +28,8 @@ type LiveFeedbackRecord struct {
 	Model             string            `json:"model"`
 	Provider          string            `json:"provider"`
 	Response          string            `json:"response"`
+	Thinking          string            `json:"thinking,omitempty"`
+	TranscriptFile    string            `json:"transcript_file,omitempty"`
 	CorrectedResponse string            `json:"corrected_response,omitempty"`
 	UserScore         int               `json:"user_score"`
 	UserReason        string            `json:"user_reason"`
@@ -38,7 +42,33 @@ func ComputePromptHash(body string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// SaveLiveFeedback persists a feedback record to a JSON file in dir.
+// FormatTranscript formats full prompt, thinking tokens, response, and corrected response into a readable transcript string.
+func FormatTranscript(rec LiveFeedbackRecord) string {
+	var b strings.Builder
+	b.WriteString("=== FULL PROMPT ===\n")
+	b.WriteString(rec.FullPrompt)
+	b.WriteString("\n")
+
+	if rec.Thinking != "" {
+		b.WriteString("\n=== THINKING / REASONING ===\n")
+		b.WriteString(rec.Thinking)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n=== RESPONSE ===\n")
+	b.WriteString(rec.Response)
+	b.WriteString("\n")
+
+	if rec.CorrectedResponse != "" {
+		b.WriteString("\n=== CORRECTED RESPONSE ===\n")
+		b.WriteString(rec.CorrectedResponse)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// SaveLiveFeedback persists a feedback record to a JSON file and transcript TXT file in dir.
 func SaveLiveFeedback(dir string, rec LiveFeedbackRecord) (string, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("creating live feedback dir: %w", err)
@@ -46,6 +76,11 @@ func SaveLiveFeedback(dir string, rec LiveFeedbackRecord) (string, error) {
 
 	filename := fmt.Sprintf("live_%s.json", rec.ID)
 	filePath := filepath.Join(dir, filename)
+
+	transcriptFilename := fmt.Sprintf("live_%s.transcript.txt", rec.ID)
+	transcriptPath := filepath.Join(dir, transcriptFilename)
+
+	rec.TranscriptFile = transcriptFilename
 
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -56,10 +91,15 @@ func SaveLiveFeedback(dir string, rec LiveFeedbackRecord) (string, error) {
 		return "", fmt.Errorf("writing live feedback file: %w", err)
 	}
 
+	transcriptBody := FormatTranscript(rec)
+	if err := os.WriteFile(transcriptPath, []byte(transcriptBody), 0o600); err != nil {
+		return "", fmt.Errorf("writing live feedback transcript file: %w", err)
+	}
+
 	return filePath, nil
 }
 
-// SavePendingLiveFeedback persists a pending feedback record before editor closes.
+// SavePendingLiveFeedback persists a pending feedback record and transcript file before editor closes.
 func SavePendingLiveFeedback(dir string, rec LiveFeedbackRecord) (string, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("creating live feedback dir: %w", err)
@@ -68,6 +108,11 @@ func SavePendingLiveFeedback(dir string, rec LiveFeedbackRecord) (string, error)
 	filename := fmt.Sprintf("pending_%s.json", rec.ID)
 	filePath := filepath.Join(dir, filename)
 
+	transcriptFilename := fmt.Sprintf("pending_%s.transcript.txt", rec.ID)
+	transcriptPath := filepath.Join(dir, transcriptFilename)
+
+	rec.TranscriptFile = transcriptFilename
+
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshaling pending live feedback record: %w", err)
@@ -75,6 +120,11 @@ func SavePendingLiveFeedback(dir string, rec LiveFeedbackRecord) (string, error)
 
 	if err := os.WriteFile(filePath, data, 0o600); err != nil {
 		return "", fmt.Errorf("writing pending live feedback file: %w", err)
+	}
+
+	transcriptBody := FormatTranscript(rec)
+	if err := os.WriteFile(transcriptPath, []byte(transcriptBody), 0o600); err != nil {
+		return "", fmt.Errorf("writing pending live feedback transcript file: %w", err)
 	}
 
 	return filePath, nil
@@ -99,6 +149,9 @@ func FinalizeLiveFeedback(evalDir, pendingPath, commitMsgPath string) (*LiveFeed
 	}
 
 	_ = os.Remove(pendingPath)
+	pendingTranscript := strings.TrimSuffix(pendingPath, ".json") + ".transcript.txt"
+	_ = os.Remove(pendingTranscript)
+
 	return rec, nil
 }
 
@@ -132,9 +185,21 @@ func LoadLiveFeedback(path string) (*LiveFeedbackRecord, error) {
 
 // PromptUserFeedback prompts the user for a 1-5 score and feedback reason.
 func PromptUserFeedback(in io.Reader, out io.Writer) (int, string, error) {
+	if in == nil || in == os.Stdin {
+		if f, ok := in.(*os.File); !ok || !isatty.IsTerminal(f.Fd()) {
+			if tty, err := os.Open("/dev/tty"); err == nil {
+				defer func() { _ = tty.Close() }()
+				in = tty
+			}
+		}
+	}
+	if in == nil {
+		in = os.Stdin
+	}
+
 	scanner := bufio.NewScanner(in)
 
-	_, _ = fmt.Fprint(out, "Score response (1-5): ")
+	_, _ = fmt.Fprint(out, "Score response (1-5, 1=bad, 5=good): ")
 	if !scanner.Scan() {
 		return 0, "", scanner.Err()
 	}

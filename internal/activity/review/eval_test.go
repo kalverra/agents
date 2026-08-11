@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,9 +50,17 @@ func TestRunner_Run_EvalModeCapturesFeedback(t *testing.T) {
 
 	entries, err := os.ReadDir(evalDir)
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	require.Len(t, entries, 2)
 
-	rec, err := eval.LoadLiveFeedback(filepath.Join(evalDir, entries[0].Name()))
+	var jsonPath string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			jsonPath = filepath.Join(evalDir, e.Name())
+			break
+		}
+	}
+	require.NotEmpty(t, jsonPath)
+	rec, err := eval.LoadLiveFeedback(jsonPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, "activity", rec.Command)

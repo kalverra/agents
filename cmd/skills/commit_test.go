@@ -48,6 +48,7 @@ func TestCommitMsgCmd_InstallHookWithEval(t *testing.T) {
 	prepContent, err := os.ReadFile(prepPath) //nolint:gosec
 	require.NoError(t, err)
 	assert.Contains(t, string(prepContent), "--eval")
+	assert.Contains(t, string(prepContent), "/dev/tty")
 
 	postPath := filepath.Join(tmpHome, ".config", "git", "hooks", "commit-msg")
 	postContent, err := os.ReadFile(postPath) //nolint:gosec
