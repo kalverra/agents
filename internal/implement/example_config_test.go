@@ -12,7 +12,7 @@ import (
 // The shipped example must always parse and contain the documented modes.
 func TestExampleConfigLoads(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join("..", "..", "implement.example.yaml")
+	path := filepath.Join("..", "..", "implement.example.toml")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("example config not found at %s", path)
 	}

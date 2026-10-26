@@ -37,8 +37,8 @@ session and compiled to a plan.md, which the human accepts before any step
 runs. Editing plan.md after acceptance escalates on resume (restore it, or
 --resume --accept-plan-changes to re-gate and reconcile step status).
 
-Requires an implement.yaml (repo .agents/implement.yaml or
-~/.config/agents/implement.yaml) defining modes and per-role harness/model
+Requires an implement.toml (repo .agents/implement.toml or
+~/.config/agents/implement.toml) defining modes and per-role harness/model
 assignments. The worktree must be clean: each approved step is committed
 (message from the worker's proposed COMMIT line), and after all steps the
 whole diff is agent-reviewed, then opened for your final human approval.
@@ -58,7 +58,7 @@ repo:
 		RunE: runImplement,
 	}
 
-	cmd.Flags().String("mode", "", "Mode defined in implement.yaml (e.g. simple, medium, hard, extreme)")
+	cmd.Flags().String("mode", "", "Mode defined in implement.toml (e.g. simple, medium, hard, extreme)")
 	cmd.Flags().String("session", "", "Session name; artifacts go to .agents/local/<session>/")
 	cmd.Flags().String("plan", "", "Adopt an existing plan.md (flow-native format) instead of a spec dir")
 	cmd.Flags().String("spec", "", "Spec dir to implement (openspec change or spec-kit specs/<name>/)")
@@ -66,9 +66,9 @@ repo:
 	cmd.Flags().Bool("verbose", false, "Print each agent tool event as it streams")
 	cmd.Flags().Bool("resume", false, "Resume an existing session from its state.json")
 	cmd.Flags().Bool("accept-plan-changes", false, "With --resume: re-accept a plan.md edited after acceptance")
-	cmd.Flags().Bool("list", false, "List modes defined in implement.yaml and exit")
+	cmd.Flags().Bool("list", false, "List modes defined in implement.toml and exit")
 	cmd.Flags().
-		String("config", "", "Explicit path to implement.yaml (default: .agents/implement.yaml then ~/.config/agents/implement.yaml)")
+		String("config", "", "Explicit path to implement.toml (default: .agents/implement.toml then ~/.config/agents/implement.toml)")
 	return cmd
 }
 
@@ -90,7 +90,7 @@ func runImplement(cmd *cobra.Command, args []string) error {
 	}
 	implCfg, err := implement.LoadConfig(configPaths...)
 	if err != nil {
-		return fmt.Errorf("loading implement config: %w (see implement.example.yaml in the agents repo)", err)
+		return fmt.Errorf("loading implement config: %w (see implement.example.toml in the agents repo)", err)
 	}
 
 	if list {

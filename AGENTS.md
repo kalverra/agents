@@ -58,9 +58,9 @@ agents implement --mode <mode> --session <name>            # Run against auto-de
 agents implement --mode <mode> --session <name> --resume   # Resume session (--accept-plan-changes if plan.md edited)
 ```
 
-- **Configuration**: `.agents/implement.yaml` in the repo, else `~/.config/agents/implement.yaml` (see
-  [`implement.example.yaml`](implement.example.yaml)).
-- **Verification gate**: The harness runs verification commands defined in `implement.yaml`'s `verification:` map after
+- **Configuration**: `.agents/implement.toml` in the repo, else `~/.config/agents/implement.toml` (see
+  [`implement.example.toml`](implement.example.toml)).
+- **Verification gate**: The harness runs verification commands defined in `implement.toml`'s `verification:` map after
   each step, overridden by any `## Verification` section in the spec or `plan.md`.
 - **Review gate**: Requires worker and reviewer agreement per step before committing (`COMMIT: <msg>`). Concludes with a
   whole-diff agent review and a human approval gate (`zed --diff`).

@@ -12,7 +12,7 @@ import (
 // Implementations are pure argv/event builders; process execution goes
 // through Runner so tests never spawn real agents.
 type Harness interface {
-	// Name is the harness identifier used in implement.yaml.
+	// Name is the harness identifier used in implement.toml.
 	Name() string
 	// RunArgs builds the headless stream-JSON argv for worker/reviewer.
 	// sessionID empty starts a new conversation; non-empty resumes it.

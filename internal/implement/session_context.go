@@ -10,7 +10,7 @@ import (
 	"github.com/kalverra/agents/pkg/git"
 )
 
-// checkBranch refuses to run on the repo's default branch when implement.yaml
+// checkBranch refuses to run on the repo's default branch when implement.toml
 // sets refuse_default_branch, so step commits never land on main by accident.
 // A detached HEAD passes.
 func (o *Orchestrator) checkBranch() error {
@@ -34,7 +34,7 @@ func (o *Orchestrator) checkBranch() error {
 	return nil
 }
 
-// workerContext runs implement.yaml's context_command through sh in the repo
+// workerContext runs implement.toml's context_command through sh in the repo
 // dir and returns its trimmed stdout, which is inlined into every worker
 // prompt. It returns "" when no command is set. A failing command is an error:
 // the user asked for this context, so running without it would be a surprise.
@@ -42,7 +42,7 @@ func (o *Orchestrator) workerContext(ctx context.Context) (string, error) {
 	if o.cfg == nil || o.cfg.ContextCommand == "" {
 		return "", nil
 	}
-	//nolint:gosec // G204: the command comes from the user's own implement.yaml
+	//nolint:gosec // G204: the command comes from the user's own implement.toml
 	cmd := exec.CommandContext(ctx, "sh", "-c", o.cfg.ContextCommand)
 	cmd.Dir = o.repoDir
 	var stderr bytes.Buffer

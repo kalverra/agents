@@ -23,8 +23,8 @@ var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install rules, permissions and skills into your AI harnesses",
 	Long: `Install writes the selected rules into each harness's global instructions
-file, merges permissions from config.yaml into its settings, and installs
-skills with gh skill. Choices are saved to config.yaml; installed.json records
+file, merges permissions from config.toml into its settings, and installs
+skills with gh skill. Choices are saved to config.toml; installed.json records
 what was written so "agents uninstall" can remove it.`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		flags := cmd.Flags()
@@ -83,8 +83,8 @@ what was written so "agents uninstall" can remove it.`,
 
 func init() {
 	f := installCmd.Flags()
-	f.String("targets", "", "Comma-separated harnesses: claude,antigravity,opencode (saved to config.yaml)")
-	f.String("skills", "", "Comma-separated skills to install: names, or owner/repo/name[@ref] (saved to config.yaml)")
+	f.String("targets", "", "Comma-separated harnesses: claude,antigravity,opencode (saved to config.toml)")
+	f.String("skills", "", "Comma-separated skills to install: names, or owner/repo/name[@ref] (saved to config.toml)")
 	f.Bool("all", false, "Install every built-in skill")
 	f.Bool("no-skills", false, "Leave skills alone")
 	f.Bool("no-permissions", false, "Leave harness permissions alone")
@@ -155,7 +155,7 @@ func printPlan(p *install.Plan) {
 		output.Warnf("%s not detected; installing anyway\n", name)
 	}
 	for _, d := range p.Dropped {
-		output.Warnf("%s no longer exists; dropping it from config.yaml\n", d)
+		output.Warnf("%s no longer exists; dropping it from config.toml\n", d)
 	}
 	if p.GhMissing {
 		output.Warnf("gh skill not found (needs GitHub CLI 2.90+); the gh commands will be printed instead\n")

@@ -31,10 +31,10 @@ func TestLoadSave(t *testing.T) {
 }
 
 //nolint:paralleltest // t.Setenv mutates process env
-func TestLoad_BadYAML(t *testing.T) {
+func TestLoad_BadTOML(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(filepath.Dir(Path()), 0o750))
-	require.NoError(t, os.WriteFile(Path(), []byte("rules: {"), 0o600))
+	require.NoError(t, os.WriteFile(Path(), []byte("rules = ["), 0o600))
 
 	_, err := Load()
 	assert.ErrorContains(t, err, "parsing")

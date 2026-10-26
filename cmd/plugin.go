@@ -77,7 +77,7 @@ var pluginListCmd = &cobra.Command{
 var pluginRemoveCmd = &cobra.Command{
 	Use:   "remove <name>",
 	Short: "Remove a plugin",
-	Long: `Remove a plugin from config.yaml and delete its clone, if agents cloned it.
+	Long: `Remove a plugin from config.toml and delete its clone, if agents cloned it.
 Its data dir is kept. Run "agents install" afterwards to drop its rules and
 skills from your harnesses.`,
 	Args: cobra.ExactArgs(1),
@@ -139,7 +139,7 @@ func init() {
 	rootCmd.AddCommand(pluginCmd)
 }
 
-// newPluginManager loads config.yaml into a Manager that asks before running
+// newPluginManager loads config.toml into a Manager that asks before running
 // a build command, unless --yes is set.
 func newPluginManager(cmd *cobra.Command) (*plugins.Manager, error) {
 	cfg, err := config.Load()

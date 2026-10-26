@@ -72,7 +72,7 @@ func Execute() {
 	}
 }
 
-// addedPlugins returns the plugins in config.yaml that can be read. Problems
+// addedPlugins returns the plugins in config.toml that can be read. Problems
 // are left for `agents plugin list` to report, so a broken plugin never
 // breaks unrelated commands.
 func addedPlugins() []plugins.Plugin {

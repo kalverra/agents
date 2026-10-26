@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/BurntSushi/toml"
 )
 
 // Phase is the orchestrator state-machine phase.
@@ -289,7 +289,7 @@ type State struct {
 	// escalates rather than executing an unreviewed plan.
 	PlanHash string `json:"plan_hash,omitempty"`
 	// Verification holds the repo's own test/lint/build commands the
-	// orchestrator runs after each step. Resolved from implement.yaml with
+	// orchestrator runs after each step. Resolved from implement.toml with
 	// any "## Verification" section in the spec overriding it. Zero value
 	// means no gate.
 	Verification Verification `json:"verification,omitzero"`
@@ -529,23 +529,29 @@ type Verification struct {
 	Cmds []VerifyCommand `json:"commands,omitempty"`
 }
 
-// UnmarshalYAML reads implement.yaml's verification map, preserving the
-// written order (execution order matters: build before test before lint).
-func (v *Verification) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("verification must be a map of name: command, got %v", node.Tag)
+// decodeVerification reads the [verification] table, keeping the written
+// order (execution order matters: build before test before lint). TOML tables
+// are unordered, so the order comes from the keys the decoder saw.
+func decodeVerification(md toml.MetaData, data string) (Verification, error) {
+	var raw struct {
+		Verification map[string]string `toml:"verification"`
 	}
-	cmds := make([]VerifyCommand, 0, len(node.Content)/2)
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		key := strings.TrimSpace(node.Content[i].Value)
-		val := strings.TrimSpace(node.Content[i+1].Value)
-		if key == "" || val == "" {
+	if _, err := toml.Decode(data, &raw); err != nil {
+		return Verification{}, fmt.Errorf("verification must be a table of name = \"command\": %w", err)
+	}
+	var cmds []VerifyCommand
+	for _, key := range md.Keys() {
+		if len(key) != 2 || key[0] != "verification" {
 			continue
 		}
-		cmds = append(cmds, VerifyCommand{Name: strings.ToLower(key), Command: val})
+		name := strings.TrimSpace(key[1])
+		command := strings.TrimSpace(raw.Verification[key[1]])
+		if name == "" || command == "" {
+			continue
+		}
+		cmds = append(cmds, VerifyCommand{Name: strings.ToLower(name), Command: command})
 	}
-	v.Cmds = cmds
-	return nil
+	return Verification{Cmds: cmds}, nil
 }
 
 // Empty reports whether no command at all was declared.

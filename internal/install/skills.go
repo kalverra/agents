@@ -32,7 +32,7 @@ type Skill struct {
 	Ref  string `json:"ref,omitempty"`
 }
 
-// ID is how config.yaml and --skills name s: "owner/repo/name[@ref]" for a
+// ID is how config.toml and --skills name s: "owner/repo/name[@ref]" for a
 // remote skill, else its name.
 func (s Skill) ID() string {
 	if s.Repo == "" {

@@ -526,7 +526,7 @@ func (o *Orchestrator) Run(ctx context.Context, opts RunOpts) error {
 		o.progressf("verification gate: %s (harness-run after each step)\n", strings.Join(names, ", "))
 	} else {
 		o.progressf(
-			"verification gate: none declared (implement.yaml verification or spec ## Verification); workers self-verify\n",
+			"verification gate: none declared (implement.toml verification or spec ## Verification); workers self-verify\n",
 		)
 	}
 

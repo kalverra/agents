@@ -154,7 +154,7 @@ func relPathOrSelf(base, path string) string {
 //   - an external spec dir is snapshotted to sessionDir/spec/ and compiled
 //     into a flow-native plan.md (context docs inlined, tasks.md checkboxes
 //     mapped to sequentially numbered steps, ## Verification section or the
-//     implement.yaml defaults carried over).
+//     implement.toml defaults carried over).
 //
 // The returned ImportedPlan is validated and gated by the caller; the
 // session's plan.md is the frozen execution contract from here on.

@@ -9,55 +9,62 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const validConfigYAML = `
-agents:
-  fast:
-    harness: agy
-    model: gemini-3.8-flash-medium
-    description: cheap and fast
-  strong:
-    harness: agy
-    model: gemini-3.8-flash-high
-    description: default worker
-  opus:
-    harness: claude
-    model: opus-5
-    effort: high
-    description: complex reasoning
-  review-fast:
-    harness: opencode
-    model: fireworks-ai/accounts/fireworks/models/glm-5p3-flash
-  review-deep:
-    harness: opencode
-    model: fireworks-ai/accounts/fireworks/models/glm-5p3
-    effort: high
+const validConfigTOML = `
+review_max_rounds = 2
+archive_on_done = false
 
-modes:
-  simple:
-    worker: fast
-  medium:
-    worker: fast
-    reviewer: review-fast
-  hard:
-    worker: strong
-    worker_options: [fast, strong, opus]
-    reviewer: review-fast
-    reviewer_options: [review-fast, review-deep]
-  extreme:
-    worker: strong
-    worker_options: [opus]
-    reviewer: review-deep
-review_max_rounds: 2
-verification:
-  build: go build ./...
-  test: go test ./...
-  lint: golangci-lint run ./... --fix
-archive_on_done: false
+[agents.fast]
+harness = "agy"
+model = "gemini-3.8-flash-medium"
+description = "cheap and fast"
+
+[agents.strong]
+harness = "agy"
+model = "gemini-3.8-flash-high"
+description = "default worker"
+
+[agents.opus]
+harness = "claude"
+model = "opus-5"
+effort = "high"
+description = "complex reasoning"
+
+[agents.review-fast]
+harness = "opencode"
+model = "fireworks-ai/accounts/fireworks/models/glm-5p3-flash"
+
+[agents.review-deep]
+harness = "opencode"
+model = "fireworks-ai/accounts/fireworks/models/glm-5p3"
+effort = "high"
+
+[modes.simple]
+worker = "fast"
+
+[modes.medium]
+worker = "fast"
+reviewer = "review-fast"
+
+[modes.hard]
+worker = "strong"
+worker_options = ["fast", "strong", "opus"]
+reviewer = "review-fast"
+reviewer_options = ["review-fast", "review-deep"]
+
+[modes.extreme]
+worker = "strong"
+worker_options = ["opus"]
+reviewer = "review-deep"
+
+[verification]
+build = "go build ./..."
+test = "go test ./..."
+lint = "golangci-lint run ./... --fix"
 `
 
 func writeConfig(t *testing.T, dir, content string) string {
 	t.Helper()
-	path := filepath.Join(dir, "implement.yaml")
+	path := filepath.Join(dir, "implement.toml")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
 }
@@ -65,7 +72,7 @@ func writeConfig(t *testing.T, dir, content string) string {
 func TestLoadConfigValid(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := writeConfig(t, dir, validConfigYAML)
+	path := writeConfig(t, dir, validConfigTOML)
 
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -137,13 +144,12 @@ func TestLoadConfigDefaultsArchiveOnDone(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  w:
-    harness: opencode
-    model: m
-modes:
-  simple:
-    worker: w
+[agents.w]
+harness = "opencode"
+model = "m"
+
+[modes.simple]
+worker = "w"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -155,13 +161,12 @@ func TestLoadConfigNoVerification(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  w:
-    harness: opencode
-    model: m
-modes:
-  simple:
-    worker: w
+[agents.w]
+harness = "opencode"
+model = "m"
+
+[modes.simple]
+worker = "w"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -172,14 +177,13 @@ func TestLoadConfigRoleTimeout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  timed:
-    harness: agy
-    model: gemini-3.8-flash-medium
-    timeout: 45m
-modes:
-  simple:
-    worker: timed
+[agents.timed]
+harness = "agy"
+model = "gemini-3.8-flash-medium"
+timeout = "45m"
+
+[modes.simple]
+worker = "timed"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -192,8 +196,8 @@ modes:
 func TestLoadConfigFirstExistingWins(t *testing.T) {
 	t.Parallel()
 	dir1, dir2 := t.TempDir(), t.TempDir()
-	p1 := writeConfig(t, dir1, validConfigYAML)
-	missing := filepath.Join(dir2, "implement.yaml")
+	p1 := writeConfig(t, dir1, validConfigTOML)
+	missing := filepath.Join(dir2, "implement.toml")
 
 	cfg, err := LoadConfig(p1, missing)
 	require.NoError(t, err)
@@ -206,7 +210,7 @@ func TestLoadConfigFirstExistingWins(t *testing.T) {
 
 func TestLoadConfigNoneExist(t *testing.T) {
 	t.Parallel()
-	_, err := LoadConfig(filepath.Join(t.TempDir(), "nope.yaml"))
+	_, err := LoadConfig(filepath.Join(t.TempDir(), "nope.toml"))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
@@ -215,13 +219,12 @@ func TestLoadConfigDefaultsReviewRounds(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  w:
-    harness: opencode
-    model: m
-modes:
-  simple:
-    worker: w
+[agents.w]
+harness = "opencode"
+model = "m"
+
+[modes.simple]
+worker = "w"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -234,249 +237,239 @@ func TestValidateErrors(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		yaml string
+		toml string
 		want string
 	}{
 		{
 			name: "no agents catalog",
-			yaml: `
-modes:
-  simple:
-    worker: fast
+			toml: `
+[modes.simple]
+worker = "fast"
 `,
 			want: "no agents defined in catalog",
 		},
 		{
 			name: "no modes",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
 `,
 			want: "no modes defined",
 		},
 		{
 			name: "invalid catalog agent name",
-			yaml: `
-agents:
-  _fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: _fast
+			toml: `
+[agents._fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "_fast"
 `,
 			want: `agent "_fast": invalid name`,
 		},
 		{
 			name: "invalid harness in unused catalog entry",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-  bad:
-    harness: cursor
-    model: m
-modes:
-  simple:
-    worker: fast
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[agents.bad]
+harness = "cursor"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: `unknown harness "cursor"`,
 		},
 		{
 			name: "missing model in unused catalog entry",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-  no-model:
-    harness: agy
-modes:
-  simple:
-    worker: fast
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[agents.no-model]
+harness = "agy"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: `model is required`,
 		},
 		{
 			name: "bad timeout in catalog entry",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-    timeout: soon
-modes:
-  simple:
-    worker: fast
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+timeout = "soon"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: `invalid timeout "soon"`,
 		},
 		{
 			name: "missing worker in mode",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple: {}
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
 `,
 			want: `worker is required`,
 		},
 		{
 			name: "unknown worker agent",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: nope
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "nope"
 `,
 			want: `unknown worker "nope"`,
 		},
 		{
 			name: "unknown reviewer agent",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-    reviewer: nope
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
+reviewer = "nope"
 `,
 			want: `unknown reviewer "nope"`,
 		},
 		{
 			name: "unknown agent in worker_options",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-    worker_options: [fast, nope]
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
+worker_options = ["fast", "nope"]
 `,
 			want: `unknown agent "nope" in worker_options`,
 		},
 		{
 			name: "unknown agent in reviewer_options",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-    reviewer: fast
-    reviewer_options: [fast, nope]
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
+reviewer = "fast"
+reviewer_options = ["fast", "nope"]
 `,
 			want: `unknown agent "nope" in reviewer_options`,
 		},
 		{
 			name: "reviewer_options specified without reviewer",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-    reviewer_options: [fast]
+			toml: `
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
+reviewer_options = ["fast"]
 `,
 			want: `reviewer_options specified without reviewer`,
 		},
 		{
 			name: "negative verify_max_rounds",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-verify_max_rounds: -1
+			toml: `
+verify_max_rounds = -1
+
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: "verify_max_rounds must be >= 0",
 		},
 		{
 			name: "negative review_max_rounds",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-review_max_rounds: -1
+			toml: `
+review_max_rounds = -1
+
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: "review_max_rounds must be >= 0",
 		},
 		{
 			name: "invalid verify_timeout format",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-verify_timeout: soon
+			toml: `
+verify_timeout = "soon"
+
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: `invalid verify_timeout "soon"`,
 		},
 		{
 			name: "negative verify_timeout",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-verify_timeout: -5m
+			toml: `
+verify_timeout = "-5m"
+
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: "verify_timeout must be positive",
 		},
 		{
 			name: "negative verify_max_total_rounds",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-verify_max_total_rounds: -1
+			toml: `
+verify_max_total_rounds = -1
+
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: "verify_max_total_rounds must be >= 0",
 		},
 		{
 			name: "negative ask_max_rounds",
-			yaml: `
-agents:
-  fast:
-    harness: agy
-    model: m
-modes:
-  simple:
-    worker: fast
-ask_max_rounds: -1
+			toml: `
+ask_max_rounds = -1
+
+[agents.fast]
+harness = "agy"
+model = "m"
+
+[modes.simple]
+worker = "fast"
 `,
 			want: "ask_max_rounds must be >= 0",
 		},
@@ -485,7 +478,7 @@ ask_max_rounds: -1
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			path := writeConfig(t, dir, tc.yaml)
+			path := writeConfig(t, dir, tc.toml)
 			_, err := LoadConfig(path)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
@@ -496,7 +489,7 @@ ask_max_rounds: -1
 func TestModeUnknown(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := writeConfig(t, dir, validConfigYAML)
+	path := writeConfig(t, dir, validConfigTOML)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
 
@@ -509,14 +502,14 @@ func TestLoadConfigVerifyTimeout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  w:
-    harness: opencode
-    model: m
-modes:
-  simple:
-    worker: w
-verify_timeout: 45m
+verify_timeout = "45m"
+
+[agents.w]
+harness = "opencode"
+model = "m"
+
+[modes.simple]
+worker = "w"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -527,14 +520,14 @@ func TestLoadConfigVerifyMaxTotalRounds(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  w:
-    harness: opencode
-    model: m
-modes:
-  simple:
-    worker: w
-verify_max_total_rounds: 10
+verify_max_total_rounds = 10
+
+[agents.w]
+harness = "opencode"
+model = "m"
+
+[modes.simple]
+worker = "w"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -545,14 +538,14 @@ func TestLoadConfigAskMaxRounds(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
-agents:
-  w:
-    harness: opencode
-    model: m
-modes:
-  simple:
-    worker: w
-ask_max_rounds: 5
+ask_max_rounds = 5
+
+[agents.w]
+harness = "opencode"
+model = "m"
+
+[modes.simple]
+worker = "w"
 `)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)

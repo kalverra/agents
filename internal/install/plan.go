@@ -231,7 +231,7 @@ func (i *Installer) resolveSkills(p *Plan, req Request) ([]Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Remote skills are offered only once named, by --skills or config.yaml.
+	// Remote skills are offered only once named, by --skills or config.toml.
 	named := req.Skills
 	if named == nil && i.Config.Skills != nil {
 		named = *i.Config.Skills

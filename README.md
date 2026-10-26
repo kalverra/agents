@@ -4,8 +4,8 @@ One CLI to set up Claude Code, Antigravity and OpenCode from one place. It write
 merges permissions, installs skills with [`gh skill`](https://cli.github.com/manual/gh_skill_install), and runs plugin
 commands that do deterministic work for your agents.
 
-**Use the agent for reasoning. Use code for everything else.** Skills and rules stay small. Plugin commands fetch exactly
-the data an agent needs, so it doesn't burn context on MCP servers or shell output.
+**Use the agent for reasoning. Use code for everything else.** Skills and rules stay small. Plugin commands fetch
+exactly the data an agent needs, so it doesn't burn context on MCP servers or shell output.
 
 ## Install
 
@@ -30,9 +30,9 @@ agents skills update         # Update installed skills (gh skill update)
 
 `install` only touches what it owns:
 
-- **Rules** go between `<!-- agents:begin -->` and `<!-- agents:end -->` in `~/.claude/CLAUDE.md`,
-  `~/.gemini/GEMINI.md` and `~/.config/opencode/AGENTS.md`. Text outside the markers stays.
-- **Permissions** from `config.yaml` merge into each harness's settings. Uninstall removes only entries agents added.
+- **Rules** go between `<!-- agents:begin -->` and `<!-- agents:end -->` in `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`
+  and `~/.config/opencode/AGENTS.md`. Text outside the markers stays.
+- **Permissions** from `config.toml` merge into each harness's settings. Uninstall removes only entries agents added.
 - **Skills** install through `gh skill`. Built-in skills are pinned to this binary's release tag; a dev build installs
   the latest. Skills can also come from [other repos](#skills).
 
@@ -40,9 +40,9 @@ agents skills update         # Update installed skills (gh skill update)
 
 | Path | Contents |
 |---|---|
-| `~/.config/agents/config.yaml` | Chosen harnesses, rules, skills, permissions and plugins |
+| `~/.config/agents/config.toml` | Chosen harnesses, rules, skills, permissions and plugins |
 | `~/.config/agents/rules/*.md` | Your own rules. A file with a built-in rule's name replaces it. |
-| `~/.config/agents/implement.yaml` | `agents implement` modes (see [`implement.example.yaml`](implement.example.yaml)) |
+| `~/.config/agents/implement.toml` | `agents implement` modes (see [`implement.example.toml`](implement.example.toml)) |
 | `~/.local/share/agents/plugins/<name>` | Plugins added from a git URL |
 | `~/.local/share/agents/plugin-data/<name>` | Each plugin's data |
 | `~/.local/state/agents/installed.json` | What install wrote, so uninstall can remove it |
@@ -58,14 +58,16 @@ gh skill install kalverra/agents refactoring --agent claude-code --scope user
 ```
 
 To install a skill from another GitHub repo, name it `owner/repo/name`, with an optional `@ref` (a tag or commit), in
-`config.yaml` or `--skills`. Without a ref, gh installs the repo's latest release, else its default branch. A remote
-skill replaces any built-in or plugin skill with the same name. Once named, it shows up in `agents install --reconfigure`.
+`config.toml` or `--skills`. Without a ref, gh installs the repo's latest release, else its default branch. A remote
+skill replaces any built-in or plugin skill with the same name. Once named, it shows up in
+`agents install --reconfigure`.
 
-```yaml
-skills:
-  - refactoring
-  - mattpocock/skills/grilling
-  - mattpocock/skills/handoff@v1.3.1
+```toml
+skills = [
+  "refactoring",
+  "mattpocock/skills/grilling",
+  "mattpocock/skills/handoff@v1.3.1",
+]
 ```
 
 ## Plugins
@@ -117,7 +119,7 @@ my-plugin/
 `agents <cmd>` looks for a command in this order:
 
 1. Built-in commands.
-2. `bin/agents-<cmd>` in each plugin, in `config.yaml` order.
+2. `bin/agents-<cmd>` in each plugin, in `config.toml` order.
 3. `agents-<cmd>` on `PATH`.
 
 A command can be any executable. Args, stdin, stdout and the exit code pass through. It gets these env vars (Go plugins

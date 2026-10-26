@@ -14,7 +14,7 @@ import (
 	"slices"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/BurntSushi/toml"
 
 	"github.com/kalverra/agents/internal/paths"
 )
@@ -39,14 +39,14 @@ var agentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 // RoleSpec configures one role: which harness runs it, with which model.
 type RoleSpec struct {
-	Harness     string `yaml:"harness"`
-	Model       string `yaml:"model"`
-	Effort      string `yaml:"effort,omitempty"`
-	Description string `yaml:"description,omitempty"`
+	Harness     string `toml:"harness"`
+	Model       string `toml:"model"`
+	Effort      string `toml:"effort,omitempty"`
+	Description string `toml:"description,omitempty"`
 	// Timeout bounds one headless agent run (Go duration string, e.g. "30m").
 	// Consumed by harnesses with a run-timeout flag (agy --print-timeout);
 	// others ignore it.
-	Timeout string `yaml:"timeout,omitempty"`
+	Timeout string `toml:"timeout,omitempty"`
 }
 
 // NamedSpec is one selectable agent: its catalog name plus resolved spec.
@@ -58,71 +58,73 @@ type NamedSpec struct {
 // ModeConfig configures all roles for an implement mode. A nil Reviewer
 // skips that stage (worker only).
 type ModeConfig struct {
-	WorkerName      string   `yaml:"worker"`
-	WorkerOptions   []string `yaml:"worker_options,omitempty"`
-	ReviewerName    string   `yaml:"reviewer,omitempty"`
-	ReviewerOptions []string `yaml:"reviewer_options,omitempty"`
+	WorkerName      string   `toml:"worker"`
+	WorkerOptions   []string `toml:"worker_options,omitempty"`
+	ReviewerName    string   `toml:"reviewer,omitempty"`
+	ReviewerOptions []string `toml:"reviewer_options,omitempty"`
 
 	// Resolved by Config.Validate from the top-level agents catalog.
-	Worker          RoleSpec    `yaml:"-"`
-	Reviewer        *RoleSpec   `yaml:"-"`
-	WorkerChoices   []NamedSpec `yaml:"-"`
-	ReviewerChoices []NamedSpec `yaml:"-"`
+	Worker          RoleSpec    `toml:"-"`
+	Reviewer        *RoleSpec   `toml:"-"`
+	WorkerChoices   []NamedSpec `toml:"-"`
+	ReviewerChoices []NamedSpec `toml:"-"`
 }
 
-// Config is the parsed contents of implement.yaml.
+// Config is the parsed contents of implement.toml.
 type Config struct {
 	// Agents defines the catalog of reusable agent specs.
-	Agents map[string]RoleSpec `yaml:"agents"`
+	Agents map[string]RoleSpec `toml:"agents"`
 	// Modes maps mode name (simple/medium/hard/extreme/...) to role specs.
-	Modes map[string]ModeConfig `yaml:"modes"`
+	Modes map[string]ModeConfig `toml:"modes"`
 	// Verification declares the repo's test/lint/build commands the
 	// orchestrator runs itself after each step, in the order written. A
 	// "## Verification" section in the imported spec overrides it.
-	Verification Verification `yaml:"verification"`
+	// It is read from the [verification] table by LoadConfig, which keeps the
+	// written order.
+	Verification Verification `toml:"-"`
 	// ArchiveOnDone closes the loop with the source spec when the session
 	// completes: archives an openspec change, marks a spec-kit spec done.
 	// Defaults to true. Nil means "use the default".
-	ArchiveOnDone *bool `yaml:"archive_on_done,omitempty"`
+	ArchiveOnDone *bool `toml:"archive_on_done,omitempty"`
 	// ReviewMaxRounds bounds worker fix rounds after reviewer rejection
 	// before escalating to the user. Defaults to 3.
-	ReviewMaxRounds int `yaml:"review_max_rounds"`
+	ReviewMaxRounds int `toml:"review_max_rounds"`
 	// VerifyMaxRounds bounds worker fix attempts after a plan-declared
 	// verification command fails, before escalating to the user. Defaults
-	// to 2. Zero in implement.yaml means "use the default"; set it negative to
+	// to 2. Zero in implement.toml means "use the default"; set it negative to
 	// reject (validation) rather than disable.
-	VerifyMaxRounds int `yaml:"verify_max_rounds"`
+	VerifyMaxRounds int `toml:"verify_max_rounds"`
 	// VerifyMaxTotalRounds bounds total verification fix attempts for
 	// one step across all commands, so a worker cycling between two failing
 	// commands cannot loop forever under the per-command budget. Defaults
-	// to 6 (DefaultVerifyMaxTotalRounds). Zero in implement.yaml means "use the default";
+	// to 6 (DefaultVerifyMaxTotalRounds). Zero in implement.toml means "use the default";
 	// set it negative to reject (validation) rather than disable.
-	VerifyMaxTotalRounds int `yaml:"verify_max_total_rounds"`
+	VerifyMaxTotalRounds int `toml:"verify_max_total_rounds"`
 	// VerifyTimeout bounds one verification command execution (Go duration string,
 	// e.g. "15m", "45m"). Defaults to 15m (DefaultVerifyTimeout).
-	VerifyTimeout string `yaml:"verify_timeout,omitempty"`
+	VerifyTimeout string `toml:"verify_timeout,omitempty"`
 	// AskMaxRounds bounds worker escalation question rounds before escalating
-	// to the user. Defaults to 3 (DefaultAskMaxRounds). Zero in implement.yaml means
+	// to the user. Defaults to 3 (DefaultAskMaxRounds). Zero in implement.toml means
 	// "use the default"; set it negative to reject (validation) rather than disable.
-	AskMaxRounds int `yaml:"ask_max_rounds"`
+	AskMaxRounds int `toml:"ask_max_rounds"`
 	// ContextCommand is a shell command run in the repo dir at session start
 	// and resume. Its stdout is inlined into every worker prompt (e.g. the
 	// current ticket). Empty means no extra context.
-	ContextCommand string `yaml:"context_command,omitempty"`
+	ContextCommand string `toml:"context_command,omitempty"`
 	// RefuseDefaultBranch stops a session from starting or resuming while the
 	// repo is on its default branch.
-	RefuseDefaultBranch bool `yaml:"refuse_default_branch,omitempty"`
+	RefuseDefaultBranch bool `toml:"refuse_default_branch,omitempty"`
 
 	path string
 }
 
-// DefaultReviewMaxRounds is used when implement.yaml omits review_max_rounds.
+// DefaultReviewMaxRounds is used when implement.toml omits review_max_rounds.
 const DefaultReviewMaxRounds = 3
 
-// DefaultAskMaxRounds is used when implement.yaml omits ask_max_rounds.
+// DefaultAskMaxRounds is used when implement.toml omits ask_max_rounds.
 const DefaultAskMaxRounds = 3
 
-// DefaultVerifyMaxRounds is used when implement.yaml omits verify_max_rounds.
+// DefaultVerifyMaxRounds is used when implement.toml omits verify_max_rounds.
 // Lower than the review budget: a verification failure is a hard, machine-
 // checked signal, so a worker that cannot fix it in two tries needs a human.
 const DefaultVerifyMaxRounds = 2
@@ -132,18 +134,18 @@ const DefaultVerifyMaxRounds = 2
 // commands cannot loop forever under the per-command budget.
 const DefaultVerifyMaxTotalRounds = 6
 
-// DefaultConfigPaths returns candidate implement.yaml locations, in precedence order:
-// the current repo's .agents/implement.yaml, then implement.yaml in the user config dir
+// DefaultConfigPaths returns candidate implement.toml locations, in precedence order:
+// the current repo's .agents/implement.toml, then implement.toml in the user config dir
 // (~/.config/agents by default).
 func DefaultConfigPaths() []string {
 	candidates := []string{}
 	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, ".agents", "implement.yaml"))
+		candidates = append(candidates, filepath.Join(cwd, ".agents", "implement.toml"))
 	}
-	return append(candidates, filepath.Join(paths.ConfigDir(), "implement.yaml"))
+	return append(candidates, filepath.Join(paths.ConfigDir(), "implement.toml"))
 }
 
-// LoadConfig reads the first existing implement.yaml from the given candidate paths.
+// LoadConfig reads the first existing implement.toml from the given candidate paths.
 // Returns an error wrapping os.ErrNotExist if none exist.
 func LoadConfig(paths ...string) (*Config, error) {
 	var chosen string
@@ -154,7 +156,7 @@ func LoadConfig(paths ...string) (*Config, error) {
 		}
 	}
 	if chosen == "" {
-		return nil, fmt.Errorf("no implement.yaml found in %v: %w", paths, os.ErrNotExist)
+		return nil, fmt.Errorf("no implement.toml found in %v: %w", paths, os.ErrNotExist)
 	}
 
 	data, err := os.ReadFile(chosen) //nolint:gosec // user-specified config path
@@ -163,7 +165,11 @@ func LoadConfig(paths ...string) (*Config, error) {
 	}
 
 	cfg := &Config{path: chosen}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	md, err := toml.Decode(string(data), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", chosen, err)
+	}
+	if cfg.Verification, err = decodeVerification(md, string(data)); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", chosen, err)
 	}
 	if err := cfg.Validate(); err != nil {

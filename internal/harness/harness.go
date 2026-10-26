@@ -19,7 +19,7 @@ import (
 
 // Harness is one supported AI coding tool. Paths are at user scope.
 type Harness interface {
-	// Name is the ID used in --targets and config.yaml: "claude",
+	// Name is the ID used in --targets and config.toml: "claude",
 	// "antigravity" or "opencode".
 	Name() string
 	// GhSkillAgent is the gh skill install --agent value.

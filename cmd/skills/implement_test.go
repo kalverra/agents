@@ -15,30 +15,33 @@ import (
 	"github.com/kalverra/agents/pkg/output"
 )
 
-func writeTestImplementYAML(t *testing.T) string {
+func writeTestImplementTOML(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "implement.yaml")
-	content := `agents:
-  fast:
-    harness: agy
-    model: gemini-3.8-flash-medium
-  strong:
-    harness: agy
-    model: gemini-3.8-flash-high
-  deep:
-    harness: opencode
-    model: fireworks-ai/accounts/fireworks/models/glm-5p3
+	path := filepath.Join(dir, "implement.toml")
+	content := `
+review_max_rounds = 1
 
-modes:
-  test:
-    worker: fast
-  multi:
-    worker: fast
-    worker_options: [fast, strong]
-    reviewer: fast
-    reviewer_options: [fast, deep]
-review_max_rounds: 1
+[agents.fast]
+harness = "agy"
+model = "gemini-3.8-flash-medium"
+
+[agents.strong]
+harness = "agy"
+model = "gemini-3.8-flash-high"
+
+[agents.deep]
+harness = "opencode"
+model = "fireworks-ai/accounts/fireworks/models/glm-5p3"
+
+[modes.test]
+worker = "fast"
+
+[modes.multi]
+worker = "fast"
+worker_options = ["fast", "strong"]
+reviewer = "fast"
+reviewer_options = ["fast", "deep"]
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
@@ -48,7 +51,7 @@ func TestImplementCmdListModes(t *testing.T) { //nolint:paralleltest // mutates 
 	output.SetJSON(false)
 	t.Cleanup(func() { output.SetJSON(false) })
 
-	cfgPath := writeTestImplementYAML(t)
+	cfgPath := writeTestImplementTOML(t)
 
 	old := os.Stdout
 	r, w, err := os.Pipe()
@@ -79,7 +82,7 @@ func TestImplementCmdListModesJSON(t *testing.T) { //nolint:paralleltest // muta
 	output.SetJSON(true)
 	t.Cleanup(func() { output.SetJSON(false) })
 
-	cfgPath := writeTestImplementYAML(t)
+	cfgPath := writeTestImplementTOML(t)
 
 	old := os.Stdout
 	r, w, err := os.Pipe()
@@ -111,7 +114,7 @@ func TestImplementCmdRequiresSession(t *testing.T) {
 
 	cmd := newImplementCmd()
 	require.NoError(t, cmd.Flags().Set("list", "false"))
-	require.NoError(t, cmd.Flags().Set("config", filepath.Join("testdata", "implement.yaml")))
+	require.NoError(t, cmd.Flags().Set("config", filepath.Join("testdata", "implement.toml")))
 
 	err := cmd.RunE(cmd, nil)
 	require.Error(t, err)
@@ -123,7 +126,7 @@ func TestImplementCmdAcceptPlanChangesRequiresResume(t *testing.T) {
 
 	cmd := newImplementCmd()
 	require.NoError(t, cmd.Flags().Set("list", "false"))
-	require.NoError(t, cmd.Flags().Set("config", filepath.Join("testdata", "implement.yaml")))
+	require.NoError(t, cmd.Flags().Set("config", filepath.Join("testdata", "implement.toml")))
 	require.NoError(t, cmd.Flags().Set("session", "unit-test-session"))
 	require.NoError(t, cmd.Flags().Set("mode", "test"))
 	require.NoError(t, cmd.Flags().Set("accept-plan-changes", "true"))

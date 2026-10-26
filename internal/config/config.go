@@ -1,4 +1,4 @@
-// Package config reads and writes the user's agents config.yaml, which holds
+// Package config reads and writes the user's agents config.toml, which holds
 // the install choices (harnesses, rules, skills) and the permissions to merge
 // into each harness.
 package config
@@ -10,48 +10,48 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/BurntSushi/toml"
 
 	"github.com/kalverra/agents/internal/paths"
 )
 
 // FileName is the config file's name inside paths.ConfigDir().
-const FileName = "config.yaml"
+const FileName = "config.toml"
 
-// Config is the content of config.yaml. A nil choice list means the user has
+// Config is the content of config.toml. A nil choice list means the user has
 // not chosen yet, so install falls back to a default or asks. An empty list
 // means the user chose nothing.
 type Config struct {
-	Harnesses   *[]string   `yaml:"harnesses,omitempty"`
-	Rules       *[]string   `yaml:"rules,omitempty"`
-	Skills      *[]string   `yaml:"skills,omitempty"`
-	Permissions Permissions `yaml:"permissions,omitempty"`
+	Harnesses   *[]string   `toml:"harnesses,omitempty"`
+	Rules       *[]string   `toml:"rules,omitempty"`
+	Skills      *[]string   `toml:"skills,omitempty"`
+	Permissions Permissions `toml:"permissions,omitempty"`
 	// Plugins are the added plugins. Order matters: when two provide the same
 	// command, rule or skill, the earlier one wins.
-	Plugins []Plugin `yaml:"plugins,omitempty"`
+	Plugins []Plugin `toml:"plugins,omitempty"`
 }
 
 // Plugin is an added plugin. Exactly one of Path and URL is set: a Path
 // plugin is used in place; a URL plugin is a git clone agents manages.
 type Plugin struct {
-	Name string `yaml:"name"           json:"name"`
-	Path string `yaml:"path,omitempty" json:"path,omitempty"`
-	URL  string `yaml:"url,omitempty"  json:"url,omitempty"`
+	Name string `toml:"name"           json:"name"`
+	Path string `toml:"path,omitempty" json:"path,omitempty"`
+	URL  string `toml:"url,omitempty"  json:"url,omitempty"`
 	// Ref is the branch or tag cloned from URL; empty for the default branch.
-	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Ref string `toml:"ref,omitempty" json:"ref,omitempty"`
 }
 
 // Permissions are merged into every selected harness's settings.
 type Permissions struct {
 	// Commands are shell commands to allow or deny. Nil means DefaultCommands.
-	Commands    *Commands   `yaml:"commands,omitempty"`
-	Directories []Directory `yaml:"directories,omitempty"`
+	Commands    *Commands   `toml:"commands,omitempty"`
+	Directories []Directory `toml:"directories,omitempty"`
 }
 
 // Commands lists shell command prefixes, such as "git status".
 type Commands struct {
-	Allow []string `yaml:"allow,omitempty"`
-	Deny  []string `yaml:"deny,omitempty"`
+	Allow []string `toml:"allow,omitempty"`
+	Deny  []string `toml:"deny,omitempty"`
 }
 
 // Access is the access level a harness gets to a directory.
@@ -75,13 +75,13 @@ const (
 
 // Directory is a directory the harnesses may use outside the current project.
 type Directory struct {
-	Path   string `yaml:"path"`
-	Access Access `yaml:"access,omitempty"`
-	Trust  Trust  `yaml:"trust,omitempty"`
+	Path   string `toml:"path"`
+	Access Access `toml:"access,omitempty"`
+	Trust  Trust  `toml:"trust,omitempty"`
 }
 
 // DefaultCommands are read-only commands every harness may run without
-// asking. They apply when config.yaml has no permissions.commands.
+// asking. They apply when config.toml has no permissions.commands.
 var DefaultCommands = Commands{
 	Allow: []string{
 		"cat", "sed", "head", "tail", "less", "grep", "rg", "wc", "diff", "find", "awk",
@@ -93,12 +93,12 @@ var DefaultCommands = Commands{
 	},
 }
 
-// Path returns where config.yaml lives.
+// Path returns where config.toml lives.
 func Path() string {
 	return filepath.Join(paths.ConfigDir(), FileName)
 }
 
-// Load reads config.yaml. A missing file is an empty Config.
+// Load reads config.toml. A missing file is an empty Config.
 func Load() (*Config, error) {
 	data, err := os.ReadFile(Path())
 	if errors.Is(err, os.ErrNotExist) {
@@ -108,15 +108,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", Path(), err)
 	}
 	return &cfg, nil
 }
 
-// Save writes config.yaml, creating the config dir if needed.
+// Save writes config.toml, creating the config dir if needed.
 func (c *Config) Save() error {
-	data, err := yaml.Marshal(c)
+	data, err := toml.Marshal(c)
 	if err != nil {
 		return err
 	}

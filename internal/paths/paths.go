@@ -10,8 +10,8 @@ import (
 
 const appName = "agents"
 
-// ConfigDir returns the directory for user-edited config (config.yaml,
-// implement.yaml, rules): $XDG_CONFIG_HOME/agents, else ~/.config/agents.
+// ConfigDir returns the directory for user-edited config (config.toml,
+// implement.toml, rules): $XDG_CONFIG_HOME/agents, else ~/.config/agents.
 func ConfigDir() string {
 	return xdgDir("XDG_CONFIG_HOME", ".config")
 }

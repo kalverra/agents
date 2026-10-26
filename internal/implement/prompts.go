@@ -131,7 +131,7 @@ func RenderPrompt(name string, data any) string {
 }
 
 // WorkerPrompt instructs the worker to implement one plan step. sessionContext
-// is the output of implement.yaml's context_command (empty when unset); handing
+// is the output of implement.toml's context_command (empty when unset); handing
 // it to the worker saves it from fetching the same context itself.
 // verify carries the plan's declared verification commands: when they are
 // present the orchestrator runs them itself, so the worker is told to iterate
