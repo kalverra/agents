@@ -123,7 +123,7 @@ func TestInstallUninstall(t *testing.T) {
 
 	// First install: claude and opencode, one skill.
 	plan, _ := run(t, newTestInstaller(t, cfg, ghBin), Request{
-		Targets: []string{"claude", "opencode"}, Skills: []string{"grilling"},
+		Targets: []string{"claude", "opencode"}, Skills: []string{"refactoring"},
 	})
 	assert.Equal(t, "claude", plan.Harnesses[1].SkillsFrom, "opencode reads claude's skills")
 
@@ -134,7 +134,7 @@ func TestInstallUninstall(t *testing.T) {
 	assert.Contains(t, read(t, claude.SettingsPath()), `"Bash(git status)"`)
 	assert.Contains(t, read(t, claude.SettingsPath()), filepath.Join(home, "Projects"))
 	assert.Contains(t, read(t, opencode.SettingsPath()), `"external_directory"`)
-	assert.Equal(t, []string{"skill install kalverra/agents grilling --agent claude-code --scope user --force"},
+	assert.Equal(t, []string{"skill install kalverra/agents refactoring --agent claude-code --scope user --force"},
 		ghCalls(t, ghLog))
 	require.NotNil(t, cfg.Rules)
 	assert.Contains(t, *cfg.Rules, "rg", "non-interactive install picks every rule")
@@ -147,7 +147,7 @@ func TestInstallUninstall(t *testing.T) {
 	// Drop the skill and opencode.
 	_, res := run(t, newTestInstaller(t, cfg, ghBin), Request{Targets: []string{"claude"}, Skills: []string{}})
 	assert.Equal(t, []string{"opencode"}, res.Removed)
-	assert.Equal(t, []string{filepath.Join(claude.SkillsDir(), "grilling")}, res.LeftoverSkills)
+	assert.Equal(t, []string{filepath.Join(claude.SkillsDir(), "refactoring")}, res.LeftoverSkills)
 	assert.NoFileExists(t, opencode.InstructionsPath())
 
 	// Uninstall from a fresh load of installed.json.
@@ -173,7 +173,7 @@ func TestInstall_GhMissingPrintsCommands(t *testing.T) {
 	assert.True(t, plan.GhMissing)
 	require.NotEmpty(t, res.SkillCommands)
 	assert.Equal(t,
-		"gh skill install kalverra/agents codebase-design --agent antigravity-cli --scope user --force --pin v1.2.3",
+		"gh skill install kalverra/agents coding-standards --agent antigravity-cli --scope user --force --pin v1.2.3",
 		res.SkillCommands[0])
 	assert.Empty(t, inst.Record.Harnesses["antigravity"].Skills, "skills it did not install are not recorded")
 	assert.NoFileExists(t, harness.Antigravity{}.CLISettingsPath(), "--no-permissions leaves settings alone")
@@ -228,7 +228,7 @@ func TestInstall_PluginRulesAndSkills(t *testing.T) {
 	pl, err := plugins.Open(config.Plugin{Name: "greeter", Path: dir})
 	require.NoError(t, err)
 
-	skills := []string{"hi", "grilling"}
+	skills := []string{"hi", "refactoring"}
 	cfg := &config.Config{Skills: &skills}
 	newInst := func(added ...plugins.Plugin) *Installer {
 		inst := newTestInstaller(t, cfg, ghBin)
@@ -241,7 +241,7 @@ func TestInstall_PluginRulesAndSkills(t *testing.T) {
 	assert.Contains(t, plan.Rules, "hello")
 	assert.Contains(t, read(t, claude.InstructionsPath()), "Say hi.")
 	assert.ElementsMatch(t, []string{
-		"skill install kalverra/agents grilling --agent claude-code --scope user --force",
+		"skill install kalverra/agents refactoring --agent claude-code --scope user --force",
 		"skill install " + filepath.Join(
 			dir,
 			"skills",
@@ -256,8 +256,70 @@ func TestInstall_PluginRulesAndSkills(t *testing.T) {
 	// Without the plugin, its saved rule and skill are dropped, not errors.
 	plan, res := run(t, newInst(), Request{NoPermissions: true})
 	assert.ElementsMatch(t, []string{"rule hello", "skill hi"}, plan.Dropped)
-	assert.Equal(t, []string{"grilling"}, *cfg.Skills)
+	assert.Equal(t, []string{"refactoring"}, *cfg.Skills)
 	assert.NotContains(t, *cfg.Rules, "hello")
 	assert.NotContains(t, read(t, claude.InstructionsPath()), "Say hi.")
 	assert.Equal(t, []string{filepath.Join(claude.SkillsDir(), "hi")}, res.LeftoverSkills)
+}
+
+//nolint:paralleltest // t.Setenv mutates process env
+func TestInstall_RemoteSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	ghBin, ghLog := fakeGh(t, home)
+
+	// The remote refactoring hides the built-in one of the same name, so the
+	// saved built-in choice is dropped.
+	skills := []string{"refactoring", "mattpocock/skills/grill-me", "other/repo/refactoring@v2"}
+	cfg := &config.Config{Skills: &skills}
+	req := Request{Targets: []string{"claude"}, NoPermissions: true}
+
+	plan, _ := run(t, newTestInstaller(t, cfg, ghBin), req)
+	assert.Equal(t, []string{"skill refactoring"}, plan.Dropped)
+	assert.Equal(t, []string{"mattpocock/skills/grill-me", "other/repo/refactoring@v2"}, *cfg.Skills)
+	assert.ElementsMatch(t, []string{
+		"skill install mattpocock/skills grill-me --agent claude-code --scope user --force",
+		"skill install other/repo refactoring --agent claude-code --scope user --force --pin v2",
+	}, ghCalls(t, ghLog))
+
+	// Same source again: nothing new for gh to do.
+	plan, _ = run(t, newTestInstaller(t, cfg, ghBin), req)
+	assert.Empty(t, plan.Harnesses[0].InstallSkills)
+
+	// A new ref reinstalls.
+	req.Skills = []string{"mattpocock/skills/grill-me@v1.3.1"}
+	plan, res := run(t, newTestInstaller(t, cfg, ghBin), req)
+	assert.Equal(t, []string{"grill-me"}, plan.Harnesses[0].InstallSkills)
+	assert.Equal(t, []string{filepath.Join(harness.Claude{}.SkillsDir(), "refactoring")}, res.LeftoverSkills)
+}
+
+func TestParseRemoteSkill(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		id   string
+		want Skill
+		ok   bool
+	}{
+		{id: "mattpocock/skills/grill-me", want: Skill{Name: "grill-me", Repo: "mattpocock/skills"}, ok: true},
+		{id: "o/r/s@v1.2", want: Skill{Name: "s", Repo: "o/r", Ref: "v1.2"}, ok: true},
+		{id: "grilling"},
+		{id: "o/r"},
+		{id: "o/r/s/t"},
+		{id: "o//s"},
+		{id: "o/r/s@"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := ParseRemoteSkill(tt.id)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+			if ok {
+				assert.Equal(t, tt.id, got.ID(), "ID round-trips")
+			}
+		})
+	}
 }

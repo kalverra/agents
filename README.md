@@ -33,7 +33,8 @@ agents skills update         # Update installed skills (gh skill update)
 - **Rules** go between `<!-- agents:begin -->` and `<!-- agents:end -->` in `~/.claude/CLAUDE.md`,
   `~/.gemini/GEMINI.md` and `~/.config/opencode/AGENTS.md`. Text outside the markers stays.
 - **Permissions** from `config.yaml` merge into each harness's settings. Uninstall removes only entries agents added.
-- **Skills** install through `gh skill`, pinned to this binary's release tag. A dev build installs the latest.
+- **Skills** install through `gh skill`. Built-in skills are pinned to this binary's release tag; a dev build installs
+  the latest. Skills can also come from [other repos](#skills).
 
 ## Files
 
@@ -53,7 +54,18 @@ All paths follow `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME`, on mac
 Built-in skills live in [`skills/`](skills). You can also install them without the CLI:
 
 ```sh
-gh skill install kalverra/agents grilling --agent claude-code --scope user
+gh skill install kalverra/agents refactoring --agent claude-code --scope user
+```
+
+To install a skill from another GitHub repo, name it `owner/repo/name`, with an optional `@ref` (a tag or commit), in
+`config.yaml` or `--skills`. Without a ref, gh installs the repo's latest release, else its default branch. A remote
+skill replaces any built-in or plugin skill with the same name. Once named, it shows up in `agents install --reconfigure`.
+
+```yaml
+skills:
+  - refactoring
+  - mattpocock/skills/grilling
+  - mattpocock/skills/handoff@v1.3.1
 ```
 
 ## Plugins

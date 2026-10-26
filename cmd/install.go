@@ -84,7 +84,7 @@ what was written so "agents uninstall" can remove it.`,
 func init() {
 	f := installCmd.Flags()
 	f.String("targets", "", "Comma-separated harnesses: claude,antigravity,opencode (saved to config.yaml)")
-	f.String("skills", "", "Comma-separated built-in skills to install (saved to config.yaml)")
+	f.String("skills", "", "Comma-separated skills to install: names, or owner/repo/name[@ref] (saved to config.yaml)")
 	f.Bool("all", false, "Install every built-in skill")
 	f.Bool("no-skills", false, "Leave skills alone")
 	f.Bool("no-permissions", false, "Leave harness permissions alone")

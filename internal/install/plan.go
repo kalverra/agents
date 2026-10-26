@@ -22,7 +22,7 @@ import (
 // Request holds the install command's choices. Nil lists mean "not given".
 type Request struct {
 	Targets       []string // harness names; nil uses config, else asks or uses detected
-	Skills        []string // skill names; nil uses config, else asks
+	Skills        []string // skill names or remote IDs; nil uses config, else asks
 	AllSkills     bool     // every built-in skill
 	NoSkills      bool     // leave skills alone
 	NoPermissions bool     // leave permissions alone
@@ -143,8 +143,9 @@ func (i *Installer) planHarness(p *Plan, h harness.Harness, selected []string) H
 	hp.SkillAgent = h.GhSkillAgent()
 	prev := i.Record.Harnesses[h.Name()]
 	for _, s := range p.skillSet {
-		// A built-in skill at the same pin is already current. Plugin skills
-		// are local copies that may have changed, so they always reinstall.
+		// A built-in or remote skill from the same source is already current.
+		// Plugin skills are local copies that may have changed, so they
+		// always reinstall.
 		if s.Dir == "" && prev != nil && prev.SkillsDir == h.SkillsDir() &&
 			prev.Skills[s.Name] == p.source(s) &&
 			fileExists(filepath.Join(h.SkillsDir(), s.Name, "SKILL.md")) {
@@ -230,16 +231,26 @@ func (i *Installer) resolveSkills(p *Plan, req Request) ([]Skill, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Remote skills are offered only once named, by --skills or config.yaml.
+	named := req.Skills
+	if named == nil && i.Config.Skills != nil {
+		named = *i.Config.Skills
+	}
+	all = withRemoteSkills(all, named)
+
 	options := make([]Option, len(all))
 	var builtinNames []string
 	for k, s := range all {
 		label := s.Name + ": " + s.Description
-		if s.Plugin != "" {
+		switch {
+		case s.Plugin != "":
 			label = s.Name + " (plugin " + s.Plugin + "): " + s.Description
-		} else {
+		case s.Repo != "":
+			label = s.Name + " (" + s.Repo + ")"
+		default:
 			builtinNames = append(builtinNames, s.Name)
 		}
-		options[k] = Option{Value: s.Name, Label: label}
+		options[k] = Option{Value: s.ID(), Label: label}
 	}
 	flag := req.Skills
 	if req.AllSkills {
@@ -258,7 +269,7 @@ func (i *Installer) resolveSkills(p *Plan, req Request) ([]Skill, error) {
 	}
 	var out []Skill
 	for _, s := range all {
-		if slices.Contains(names, s.Name) {
+		if slices.Contains(names, s.ID()) {
 			out = append(out, s)
 		}
 	}
@@ -365,17 +376,27 @@ func (c choice) unknown(values []string) []string {
 	return out
 }
 
+// origin returns the repo and pin gh installs s from: its own for a remote
+// skill, else the built-in repo at the plan's pin.
+func (p *Plan) origin(s Skill) (repo, pin string) {
+	if s.Repo != "" {
+		return s.Repo, s.Ref
+	}
+	return ghskill.Repo, p.SkillsPin
+}
+
 // source identifies where s is installed from: its local dir for a plugin
-// skill, else the built-in repo at the plan's pin. The record keeps it, so a
-// later plan can tell whether an installed skill is current.
+// skill, else its repo and pin. The record keeps it, so a later plan can tell
+// whether an installed skill is current.
 func (p *Plan) source(s Skill) string {
 	if s.Dir != "" {
 		return s.Dir
 	}
-	if p.SkillsPin == "" {
-		return ghskill.Repo
+	repo, pin := p.origin(s)
+	if pin == "" {
+		return repo
 	}
-	return ghskill.Repo + "@" + p.SkillsPin
+	return repo + "@" + pin
 }
 
 // skill returns the planned skill called name.

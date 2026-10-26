@@ -101,7 +101,8 @@ func (i *Installer) applySkills(p *Plan, hp HarnessPlan, rec *HarnessRecord, out
 
 	for _, name := range hp.InstallSkills {
 		s := p.skill(name)
-		args := ghskill.InstallArgs(ghskill.Repo, name, hp.SkillAgent, p.SkillsPin)
+		repo, pin := p.origin(s)
+		args := ghskill.InstallArgs(repo, name, hp.SkillAgent, pin)
 		if s.Dir != "" {
 			args = ghskill.InstallLocalArgs(s.Dir, name, hp.SkillAgent)
 		}

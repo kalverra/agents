@@ -8,6 +8,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -16,13 +18,60 @@ import (
 )
 
 // Skill is a skill agents install can offer: a built-in one, which gh skill
-// installs from ghskill.Repo, or a plugin's, which it installs from Dir.
+// installs from ghskill.Repo; a plugin's, which it installs from Dir; or a
+// remote one, which it installs from Repo.
 type Skill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	// Plugin and Dir are set for plugin skills. Dir holds the SKILL.md.
 	Plugin string `json:"plugin,omitempty"`
 	Dir    string `json:"dir,omitempty"`
+	// Repo ("owner/repo") and Ref are set for remote skills. An empty Ref
+	// installs gh's default: the latest release, else the default branch.
+	Repo string `json:"repo,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+}
+
+// ID is how config.yaml and --skills name s: "owner/repo/name[@ref]" for a
+// remote skill, else its name.
+func (s Skill) ID() string {
+	if s.Repo == "" {
+		return s.Name
+	}
+	id := s.Repo + "/" + s.Name
+	if s.Ref != "" {
+		id += "@" + s.Ref
+	}
+	return id
+}
+
+// ParseRemoteSkill parses a remote skill ID, "owner/repo/name[@ref]". It
+// returns false for any other form, such as a plain skill name.
+func ParseRemoteSkill(id string) (Skill, bool) {
+	path, ref, hasRef := strings.Cut(id, "@")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || slices.Contains(parts, "") || (hasRef && ref == "") {
+		return Skill{}, false
+	}
+	return Skill{Name: parts[2], Repo: parts[0] + "/" + parts[1], Ref: ref}, true
+}
+
+// withRemoteSkills adds the remote skills named in ids to all. A remote skill
+// replaces any skill of the same name; of two remote skills with one name,
+// the first wins.
+func withRemoteSkills(all []Skill, ids []string) []Skill {
+	var remote []Skill
+	for _, id := range ids {
+		s, ok := ParseRemoteSkill(id)
+		if !ok || slices.ContainsFunc(remote, func(o Skill) bool { return o.Name == s.Name }) {
+			continue
+		}
+		remote = append(remote, s)
+	}
+	out := slices.DeleteFunc(slices.Clone(all), func(s Skill) bool {
+		return slices.ContainsFunc(remote, func(o Skill) bool { return o.Name == s.Name })
+	})
+	return append(out, remote...)
 }
 
 // BuiltinSkills lists the skills embedded in this binary, by name.
