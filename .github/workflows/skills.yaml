@@ -1,0 +1,46 @@
+name: Skills
+
+on:
+  pull_request:
+    paths: ["skills/**", ".github/workflows/skills.yaml"]
+  push:
+    branches: [main]
+    paths: ["skills/**", ".github/workflows/skills.yaml"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: agentskills/agentskills
+          path: .agentskills
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install skills-ref
+        run: pip install ./.agentskills/skills-ref
+      # skills-ref rejects fields outside the spec. Claude Code reads these
+      # harness fields only at the top level, so strip them from a copy
+      # before validating; every other field is still checked.
+      - name: Validate skills against the Agent Skills spec
+        env:
+          HARNESS_FIELDS: "disable-model-invocation|argument-hint"
+        run: |
+          work="$(mktemp -d)"
+          cp -R skills/. "$work"
+          status=0
+          for dir in "$work"/*/; do
+            awk -v re="^(${HARNESS_FIELDS}):" '
+              NR == 1 && $0 == "---" { fm = 1; print; next }
+              fm && $0 == "---" { fm = 0 }
+              !(fm && $0 ~ re)
+            ' "$dir/SKILL.md" > "$dir/SKILL.md.tmp"
+            mv "$dir/SKILL.md.tmp" "$dir/SKILL.md"
+            skills-ref validate "$dir" || status=1
+          done
+          exit "$status"

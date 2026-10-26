@@ -1,0 +1,20 @@
+agents:
+  fast:
+    harness: agy
+    model: gemini-3.8-flash-medium
+  strong:
+    harness: agy
+    model: gemini-3.8-flash-high
+  deep:
+    harness: opencode
+    model: fireworks-ai/accounts/fireworks/models/glm-5p3
+
+modes:
+  test:
+    worker: fast
+  multi:
+    worker: fast
+    worker_options: [fast, strong]
+    reviewer: fast
+    reviewer_options: [fast, deep]
+review_max_rounds: 1

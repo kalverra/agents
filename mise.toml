@@ -1,0 +1,44 @@
+[tasks.build]
+description = "Build agents binary"
+run = "go build -o agents ."
+
+[tasks.test]
+description = "Run unit tests with gotestsum"
+run = "go tool gotestsum -- -cover ./..."
+
+[tasks.lint]
+description = "Run golangci-lint with automatic fixes"
+run = "golangci-lint run ./... --fix"
+
+[tasks.install]
+description = "Build agents, install rules/permissions/skills, and symlink into ~/.local/bin"
+run = """
+set -eu
+go build -o agents .
+./agents install --yes
+gobin="$(go env GOBIN)"
+[ -n "$gobin" ] || gobin="$(go env GOPATH)/bin"
+rm -f "$gobin/agents" ~/.local/share/mise/installs/go/*/bin/agents
+mise reshim
+mkdir -p ~/.local/bin
+ln -sf "$PWD/agents" ~/.local/bin/agents
+"""
+
+[tasks.lefthook]
+description = "Verify lefthook dependencies and sync git hooks"
+run = """
+set -euo pipefail
+missing=()
+for cmd in lefthook betterleaks codespell actionlint golangci-lint go; do
+  if ! command -v "$cmd" >/dev/null; then
+    missing+=("$cmd")
+  fi
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "Missing dependencies (install these, then re-run mise run lefthook):" >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  exit 1
+fi
+go mod download
+lefthook install
+"""

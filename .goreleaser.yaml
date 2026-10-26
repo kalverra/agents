@@ -1,0 +1,60 @@
+version: 2
+
+project_name: agents
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: agents
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # v{{ .Version }} is the git tag for releases. Snapshot versions carry a
+    # suffix, so those builds install skills from the default branch.
+    ldflags:
+      - -s -w -X github.com/kalverra/agents/internal/buildinfo.version=v{{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: kalverra
+    name: agents
+
+homebrew_casks:
+  - name: agents
+    homepage: https://github.com/kalverra/agents
+    description: Set up rules, skills and plugin commands across AI coding harnesses
+    repository:
+      owner: kalverra
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    # The binary is not notarized; drop the quarantine flag so macOS runs it.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/agents"]
+          end

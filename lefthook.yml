@@ -1,0 +1,52 @@
+# Summary on success; command stdout/stderr only when a hook fails.
+# https://lefthook.dev/configuration/output
+output:
+  - summary
+  - success
+  - failure
+
+pre-commit:
+  parallel: true
+  commands:
+    actionlint:
+      tags: linter
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: actionlint {staged_files}
+
+    golangci-lint:
+      tags: linter
+      glob:
+        - "*.go"
+        - "**/*.go"
+        - "go.mod"
+        - "go.sum"
+      run: golangci-lint run --fix --fast-only ./...
+      stage_fixed: true
+
+    go-mod-tidy:
+      tags: linter
+      glob:
+        - "go.mod"
+        - "go.sum"
+        - "*.go"
+        - "**/*.go"
+      run: |
+        while IFS= read -r mod; do
+          [ -n "$mod" ] || continue
+          (cd "$(dirname "$mod")" && go mod tidy)
+        done <<EOF
+        $(git ls-files 'go.mod' '**/go.mod')
+        EOF
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
+    go-short-tests:
+      tags: test
+      glob:
+        - "*.go"
+        - "**/*.go"
+        - "go.mod"
+        - "go.sum"
+      run: go test -short ./...
